@@ -346,6 +346,8 @@ def show_settings_dialog(ctx):
     launcher_form.setSpacing(4)
 
     _add_checkbox(launcher_form, 'remember_chosen_clients', 'setting_remember_chosen_clients')
+    _add_checkbox(launcher_form, 'use_window_tiling', 'setting_use_window_tiling')
+    _add_checkbox(launcher_form, 'hide_taskbar_on_tile', 'setting_hide_taskbar_on_tile')
 
     layout.addWidget(launcher_group)
 

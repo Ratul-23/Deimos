@@ -43,6 +43,8 @@ DEFAULT_SETTINGS = {
     "discard_duplicate_cards": True,
     # [launcher]
     "remember_chosen_clients": False,
+    "use_window_tiling": True,
+    "hide_taskbar_on_tile": False,
 }
 
 RESTART_REQUIRED_KEYS = {"locale"}

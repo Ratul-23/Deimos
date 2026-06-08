@@ -46,6 +46,7 @@ from src import gui as deimosgui
 from src.gui import GUIKeys
 import wizlaunch
 from src.settings_manager import DeimosSettings
+from src import window_tiling
 from src.tokenizer import tokenize
 from src.deimoslang import vm
 
@@ -395,6 +396,7 @@ async def tool_finish():
 			await p.body.write_scale(1.0)
 		except Exception:
 			pass
+	window_tiling.restore_taskbar()
 	await listener.clear()
 	for p in walker.clients:
 		try:
@@ -1520,6 +1522,7 @@ async def main():
 								logger.warning("Bot script was interrupted and cannot be auto-resumed. Please restart it manually.")
 
 						if not walker.clients:
+							window_tiling.restore_taskbar()
 							gui_send_queue.put(deimosgui.GUICommand(deimosgui.GUICommandType.UpdateWindow, ('Title', f'Client: None')))
 							gui_send_queue.put(deimosgui.GUICommand(deimosgui.GUICommandType.UpdateWindow, ('Zone', f'Zone: ')))
 							gui_send_queue.put(deimosgui.GUICommand(deimosgui.GUICommandType.UpdateWindow, ('xyz', f'Position (XYZ): ')))
@@ -2237,11 +2240,26 @@ async def main():
 							# Clear any released handles so newly launched clients get auto-hooked
 							released_handles.clear()
 							gui_send_queue.put(deimosgui.GUICommand(deimosgui.GUICommandType.ClearLaunchCheckboxes))
+							use_tiling = settings.get_setting('use_window_tiling') or False
+							new_count = len(nicknames)
+							if use_tiling and new_count > 1 and new_count in window_tiling.WALL_DIMENSIONS:
+								width, height = window_tiling.get_tile_dimensions(new_count)
+								try:
+									window_tiling.set_window_size(width, height)
+								except Exception as e:
+									logger.warning(f"Could not set window size in preferences: {e}")
 							try:
-								results = await asyncio.to_thread(wizlaunch.launch_instances, nicknames, game_path)
+								results = await asyncio.to_thread(wizlaunch.launch_instances, nicknames, game_path, None)
 								for nickname, handle in results.items():
 									launched_account_map[handle] = nickname
 									logger.info(f"Launched and logged in '{nickname}'.")
+								if use_tiling and len(results) > 1:
+									new_handles = [results[n] for n in nicknames if n in results]
+									hide_tb = settings.get_setting('hide_taskbar_on_tile') or False
+									try:
+										window_tiling.tile_windows(new_handles, hide_taskbar_setting=hide_tb)
+									except Exception as e:
+										logger.warning(f"Could not tile windows: {e}")
 							except Exception as e:
 								logger.error(f"Error launching instances: {e}")
 
