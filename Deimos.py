@@ -768,6 +768,16 @@ async def main():
                     try_task_coro(combat_loop, walker.clients, True)
                 )
 
+    async def vm_toggle_combat(desired: bool | None = None):
+        # Lets a bot script's togglecombat command drive the combat hotkey.
+        if freecam_status:
+            logger.debug("Ignoring togglecombat from a bot script, freecam is active.")
+            return
+
+        enabled = combat_task is not None and not combat_task.cancelled()
+        if desired is None or desired != enabled:
+            await toggle_combat_hotkey()
+
     async def toggle_dialogue_hotkey():
         global dialogue_task
         global gui_send_queue
@@ -3260,6 +3270,7 @@ async def main():
                                 if expert_mode:
                                     while True:
                                         v = vm.VM(walker.clients)
+                                        v.on_toggle_combat = vm_toggle_combat
                                         try:
                                             v.load_from_text(command_data)
                                             v.running = True
