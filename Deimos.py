@@ -11,6 +11,7 @@ import threading
 import time
 import traceback
 import winreg
+from collections.abc import Awaitable, Callable
 from typing import List
 
 import pyperclip
@@ -62,6 +63,7 @@ from src.utils import (  # , assign_pet_level
     auto_potions,
     auto_potions_force_buy,
     collect_wisps_with_limit,
+    enter_world_from_character_select,
     get_window_from_path,
     index_with_str,
     is_free,
@@ -70,6 +72,7 @@ from src.utils import (  # , assign_pet_level
     read_webpage,
     to_world,
     try_task_coro,
+    wait_for_world,
 )
 from src.world_to_screen import get_camera_state, project_point, world_to_screen
 
@@ -1646,6 +1649,10 @@ async def main():
     initial_setup_complete = False
     # Handles explicitly released via UnhookClient — skip in continuous detection
     released_handles: set[int] = set()
+    # Handles a restart is driving itself, which detection must not hook a second time.
+    restarting_handles: set[int] = set()
+    # Titles those restarts hold open, since the kill frees the p-number early.
+    restarting_titles: set[str] = set()
     # Handles currently mid-hook (activate_hooks in progress)
     _hooking_in_progress: set[int] = set()
     # Handle -> the in-flight task waiting for that client's hooks to come ready.
@@ -1734,6 +1741,16 @@ async def main():
                 _build_hooked_clients_info(),
             )
         )
+
+    def _taken_player_nums() -> set[int]:
+        """The p-numbers already spoken for, including any a restart is holding open."""
+        taken: set[int] = set()
+
+        for title in [client.title for client in walker.clients] + list(restarting_titles):
+            if title.startswith("p") and title[1:].isdigit():
+                taken.add(int(title[1:]))
+
+        return taken
 
     async def _init_client_attrs(client):
         """Initialize all per-client attributes. Called once per client after hooking."""
@@ -1837,6 +1854,279 @@ async def main():
         finally:
             _hooking_in_progress.discard(handle)
             _hooking_tasks.pop(handle, None)
+
+    async def _unhook_and_kill_for_restart(handle: int) -> None:
+        """Unhook and kill the process behind `handle`, leaving nothing registered for it."""
+        # A hook-wait still running would keep reading a client torn down under it.
+        pending_hook: asyncio.Task | None = _hooking_tasks.pop(handle, None)
+
+        if pending_hook is not None and not pending_hook.done():
+            pending_hook.cancel()
+
+        for existing_client in walker.clients[:]:
+            if existing_client.window_handle != handle:
+                continue
+
+            if handle in walker._managed_handles:
+                walker._managed_handles.remove(handle)
+
+            walker.clients.remove(existing_client)
+
+            # close() rewrites the hook codecave, so the resolution/resize asm hooks come
+            # out first — a jump left patched into a rewritten codecave crashes the game.
+            try:
+                await client_resizing_manager.teardown_client(handle)
+
+            except Exception as error:
+                logger.opt(exception=error).debug(f"resize teardown failed for {handle}")
+
+            try:
+                existing_client.title = "Wizard101"
+                await existing_client.close()
+
+            except Exception:
+                pass
+
+            break
+
+        launched_account_map.pop(handle, None)
+        window_config_applied.discard(handle)
+        _hooking_in_progress.discard(handle)
+        released_handles.discard(handle)
+        _kill_process_by_handle(handle)
+
+    def _abandon_restart(handle: int) -> None:
+        """Give up on a half-restarted handle: stop managing it and kill the window."""
+        if handle in walker._managed_handles:
+            walker._managed_handles.remove(handle)
+
+        for existing_client in walker.clients[:]:
+            if existing_client.window_handle == handle:
+                walker.clients.remove(existing_client)
+                break
+
+        launched_account_map.pop(handle, None)
+        window_config_applied.discard(handle)
+        _hooking_in_progress.discard(handle)
+
+        try:
+            wizlaunch.kill_instance(handle)
+
+        except Exception as error:
+            logger.error(f"Failed to kill abandoned handle {handle}: {error}")
+
+        _send_hooked_clients_update()
+
+    async def _activate_ui_hook(
+        activate: Callable[[], Awaitable[None]], nickname: str, deadline: float
+    ) -> None:
+        """Turn on one pre-character-select hook, retrying while the new process settles."""
+        while True:
+            try:
+                await activate()
+                return
+
+            except wizwalker.errors.HookAlreadyActivated:
+                return
+
+            except Exception as error:
+                if time.monotonic() > deadline:
+                    raise
+
+                logger.debug(f"'{nickname}' not ready for UI hooks yet: {error}")
+                await asyncio.sleep(1)
+
+    async def _enter_world_after_relaunch(nc: Client, nickname: str) -> None:
+        """Click Play for a relaunched client, which nobody is sitting at."""
+        # activate_hooks() cannot finish until a wizard is selected, so character select
+        # is driven on the two UI hooks that do work before that point.
+        deadline: float = time.monotonic() + 120
+        await _activate_ui_hook(
+            nc.hook_handler.activate_root_window_hook, nickname, deadline
+        )
+        await _activate_ui_hook(
+            nc.hook_handler.activate_render_context_hook, nickname, deadline
+        )
+
+        try:
+            await enter_world_from_character_select(nc)
+
+        except Exception:
+            try:
+                await nc.hook_handler.deactivate_root_window_hook()
+                await nc.hook_handler.deactivate_render_context_hook()
+
+            except Exception:
+                pass
+
+            raise
+
+        # activate_hooks() refuses a hook that is already on and stops there, so
+        # the process has to be handed back with these two off.
+        await nc.hook_handler.deactivate_root_window_hook()
+        await nc.hook_handler.deactivate_render_context_hook()
+
+    async def _finish_restart(nickname: str, handle: int, nc: Client) -> Client | None:
+        """Bring one relaunched client from character select to fully hooked."""
+        try:
+            await _enter_world_after_relaunch(nc, nickname)
+
+        except Exception as error:
+            logger.error(f"Failed to get '{nickname}' into the world: {error}")
+            _abandon_restart(handle)
+            return None
+
+        task: asyncio.Task = asyncio.create_task(_auto_hook_client(nc, handle))
+        _hooking_tasks[handle] = task
+
+        try:
+            await task
+
+        except asyncio.CancelledError:
+            # The detection loop cancels this wait when the window closes, but a cancel
+            # aimed at us is not ours to swallow.
+            if not task.cancelled():
+                raise
+
+        if nc not in walker.clients:
+            logger.error(f"Failed to hook '{nickname}' after restart")
+            _abandon_restart(handle)
+            return None
+
+        # Hooks come ready while the character is still loading in.
+        await wait_for_world(nc)
+
+        logger.info(f"Restarted '{nc.title}' ({nickname}), back in-game.")
+        return nc
+
+    async def _restart_clients_and_rehook(clients: list[Client]) -> list[Client | None]:
+        """Kill, relaunch, log in and re-hook every client, returning what replaced each."""
+        results: list[Client | None] = [None] * len(clients)
+
+        # Nickname -> result slot, which also stops one account restarting twice at once.
+        targets: dict[str, int] = {}
+
+        # Nickname -> the title its replacement reclaims, in whatever order they return.
+        titles: dict[str, str] = {}
+
+        for index, client in enumerate(clients):
+            nickname: str | None = launched_account_map.get(client.window_handle)
+
+            if not nickname:
+                logger.error(
+                    f"Client {client.title}: not launched from the account vault, "
+                    "so it cannot be restarted"
+                )
+
+            elif nickname in targets:
+                logger.error(f"Client {client.title}: '{nickname}' is already restarting")
+
+            else:
+                targets[nickname] = index
+                titles[nickname] = client.title
+
+        if not targets:
+            return results
+
+        # Held from here, since the kills free these p-numbers long before they come back.
+        restarting_titles.update(titles.values())
+
+        # Detection would grab these between unmanaging them and the process dying.
+        killed: set[int] = {clients[index].window_handle for index in targets.values()}
+        restarting_handles.update(killed)
+        pending: list[tuple[str, int, Client]] = []
+        launched: dict[str, int] = {}
+
+        try:
+            for handle in killed:
+                await _unhook_and_kill_for_restart(handle)
+
+            logger.info(f"Killed for restart: {', '.join(targets)}.")
+            _send_hooked_clients_update()
+
+            # Rebuilt even when none are left, since a mass restart empties the list.
+            _restart_always_on_tasks()
+            _restart_active_toggle_tasks()
+
+            for nickname in targets:
+                launching_status[nickname] = "launching"
+
+            _send_hooked_clients_update()
+
+            try:
+                game_path: str = str(utils.get_wiz_install())
+
+                # Give the killed processes a moment to actually go away.
+                await asyncio.sleep(1)
+
+                # The 30s default expires mid-login and hands back nothing, so it is spelled out.
+                launched = await asyncio.to_thread(
+                    wizlaunch.launch_instances, list(targets), game_path, None, 60
+                )
+
+            except Exception as error:
+                logger.error(f"Error relaunching {', '.join(targets)}: {error}")
+
+            finally:
+                # One that never got a handle would spin on its placeholder forever.
+                for nickname in targets:
+                    if nickname not in launched:
+                        logger.error(f"'{nickname}' never came back from the relaunch")
+                        launching_status.pop(nickname, None)
+
+                _send_hooked_clients_update()
+
+            for nickname, handle in launched.items():
+                # Opening the process first leaves nothing registered if it died on login.
+                nc: Client = walker.client_cls(handle)
+                nc.title = titles[nickname]
+
+                # Claim the handle BEFORE it is known as a vault handle, so the
+                # detection loop never starts a second hook pass on the same process.
+                walker._managed_handles.append(handle)
+                restarting_handles.add(handle)
+                launched_account_map[handle] = nickname
+                released_handles.discard(handle)
+
+                walker.clients.append(nc)
+                _hooking_in_progress.add(handle)
+                logger.info(f"Relaunched and logged in '{nickname}' (handle {handle}).")
+
+                if client_resizing and handle not in window_config_applied:
+                    window_config_applied.add(handle)
+                    asyncio.create_task(_apply_account_window_config(nc, handle, nickname))
+
+                pending.append((nickname, handle, nc))
+
+            _send_hooked_clients_update()
+
+            finished: list[Client | None] = await asyncio.gather(
+                *(_finish_restart(nickname, handle, nc) for nickname, handle, nc in pending)
+            )
+
+        finally:
+            # A client that never finished still holds the two UI hooks, so handing it back
+            # to detection would patch a second codecave over ours.
+            for _, handle, _ in pending:
+                if handle in _hooking_in_progress:
+                    _abandon_restart(handle)
+
+            # Windows registration never reached hold no hooks of ours, so detection can take
+            # them over once it knows they came from the vault.
+            registered: set[int] = {handle for _, handle, _ in pending}
+
+            for nickname, handle in launched.items():
+                if handle not in registered:
+                    launched_account_map[handle] = nickname
+
+            restarting_handles.difference_update(registered | killed)
+            restarting_titles.difference_update(titles.values())
+
+        for (nickname, _, _), replacement in zip(pending, finished):
+            results[targets[nickname]] = replacement
+
+        _send_hooked_clients_update()
+        return results
 
     async def handle_gui():
 
@@ -2283,17 +2573,19 @@ async def main():
                 # consistent), then hand the blocking hook-wait to a per-client task —
                 # a client still at character select no longer stalls the others or the
                 # detection loop; each finishes whenever ITS wizard is selected.
-                launch_order = [h for h in launched_account_map if h in unmanaged]
+                launch_order = [
+                    launched_handle
+                    for launched_handle in launched_account_map
+                    if launched_handle in unmanaged
+                    and launched_handle not in restarting_handles
+                ]
                 for handle in launch_order:
                     if handle in _hooking_tasks:
                         continue  # already waiting on this handle's hooks
                     walker._managed_handles.append(handle)
                     nc = walker.client_cls(handle)
                     walker.clients.append(nc)
-                    existing_nums = set()
-                    for c in walker.clients:
-                        if c.title.startswith("p") and c.title[1:].isdigit():
-                            existing_nums.add(int(c.title[1:]))
+                    existing_nums = _taken_player_nums()
                     num = 1
                     while num in existing_nums:
                         num += 1
@@ -2327,10 +2619,7 @@ async def main():
                 new_clients = walker.get_new_clients()
                 if new_clients:
                     # Assign titles — fill gaps using the next available number
-                    existing_nums = set()
-                    for c in walker.clients:
-                        if c.title.startswith("p") and c.title[1:].isdigit():
-                            existing_nums.add(int(c.title[1:]))
+                    existing_nums = _taken_player_nums()
 
                     for nc in new_clients:
                         num = 1
@@ -3271,6 +3560,7 @@ async def main():
                                     while True:
                                         v = vm.VM(walker.clients)
                                         v.on_toggle_combat = vm_toggle_combat
+                                        v.on_restart_client = _restart_clients_and_rehook
                                         try:
                                             v.load_from_text(command_data)
                                             v.running = True
@@ -3650,8 +3940,14 @@ async def main():
                                 if c.window_handle not in set(handles)
                             ]
                             walker.clients[:] = new_order + remaining
-                            for i, c in enumerate(walker.clients):
-                                c.title = f"p{i + 1}"
+                            # A number a restart is holding stays open, or its replacement
+                            # would come back onto a live client's title.
+                            num = 1
+                            for client in walker.clients:
+                                while f"p{num}" in restarting_titles:
+                                    num += 1
+                                client.title = f"p{num}"
+                                num += 1
                             _send_hooked_clients_update()
 
                         case deimosgui.GUICommandType.UnhookClient:
@@ -3708,10 +4004,7 @@ async def main():
                             walker._managed_handles.append(handle)
                             nc = walker.client_cls(handle)
                             walker.clients.append(nc)
-                            existing_nums = set()
-                            for c in walker.clients:
-                                if c.title.startswith("p") and c.title[1:].isdigit():
-                                    existing_nums.add(int(c.title[1:]))
+                            existing_nums = _taken_player_nums()
                             num = 1
                             while num in existing_nums:
                                 num += 1

@@ -542,6 +542,20 @@ async def set_zone(ctx: ExecContext) -> None:
     await _record_baseline(ctx, "zone", lambda client: client.zone_name())
 
 
+@handler(CommandKind.restart_client)
+async def restart_client(ctx: ExecContext) -> None:
+    """Relaunch each client and carry on."""
+    if ctx.vm.on_restart_client is None:
+        logger.warning("Ignoring restartclient: this VM was not given a way to relaunch clients")
+        return
+
+    # Mass selector hands back the VM's own list. Swap rewrites it in place.
+    restarting: list[SprintyClient] = list(ctx.clients)
+    logger.debug(f"Restarting {', '.join(client.title for client in restarting)}")
+
+    ctx.vm.replace_clients(restarting, await ctx.vm.on_restart_client(restarting))
+
+
 @handler(CommandKind.cursor)
 async def cursor(ctx: ExecContext) -> None:
     """Move the cursor to a position or window."""

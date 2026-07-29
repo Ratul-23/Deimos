@@ -759,6 +759,66 @@ async def post_keys(client, keys):
         user32_dance.PostMessageW(client.window_handle, 0x101, ord(key), 0)
 
 
+async def enter_world_from_character_select(client: Client, timeout: float = 300.0) -> None:
+    """Click Play at character select and wait for the world to finish loading."""
+    deadline: float = time.monotonic() + timeout
+
+    while True:
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"{client.title} - never reached the game world from character select")
+
+        try:
+            if not await is_visible_by_path(client, play_button_path):
+                await asyncio.sleep(0.5)
+                continue
+
+            # The button shows before it can be pressed, so a second look confirms the first.
+            await asyncio.sleep(2)
+
+            if not await is_visible_by_path(client, play_button_path):
+                continue
+
+            await click_window_by_path(client, play_button_path)
+
+            started_loading: bool = False
+
+            for _ in range(10):
+                await asyncio.sleep(0.5)
+
+                if await client.is_loading():
+                    started_loading = True
+                    break
+
+            if not started_loading:
+                continue
+
+            break
+
+        except wizwalker.errors.WizWalkerMemoryError:
+            await asyncio.sleep(0.5)
+
+    # The screen is already up, so waiting for one to start would wait for the load after this one.
+    while await client.is_loading():
+        await asyncio.sleep(0.1)
+
+
+async def wait_for_world(client: Client, timeout: float = 120.0) -> None:
+    """Wait for a client to report a zone, which is what finishing a character load means."""
+    deadline: float = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        try:
+            if await client.zone_name():
+                return
+
+        except Exception as error:
+            logger.debug(f"{client.title} - zone not readable yet: {error}")
+
+        await asyncio.sleep(0.5)
+
+    logger.warning(f"{client.title} - never reported a zone, carrying on anyway")
+
+
 async def logout_and_in(client: Client):
     # Improved version of Major's logging out and in function
     await client.send_key(Keycode.ESC, 0.1)
