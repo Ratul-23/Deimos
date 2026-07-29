@@ -1,0 +1,1 @@
+"""The deimoslang bot language."""
