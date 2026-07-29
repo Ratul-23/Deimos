@@ -92,6 +92,7 @@ class TokenKind(Enum):
     command_set_zone = auto()
     command_toggle_combat = auto()
     command_restart_bot = auto()
+    command_restart_client = auto()
     command_move_cursor = auto()
     command_move_cursor_window = auto()
 
@@ -307,6 +308,8 @@ _STATEMENT_COMMANDS: tuple[tuple[str, TokenKind], ...] = (
     ("rerun", TokenKind.command_restart_bot),
     ("restart", TokenKind.command_restart_bot),
     ("restartbot", TokenKind.command_restart_bot),
+    ("restartclient", TokenKind.command_restart_client),
+    ("relaunchclient", TokenKind.command_restart_client),
     ("cursor", TokenKind.command_move_cursor),
     ("movecursor", TokenKind.command_move_cursor),
     ("mousexy", TokenKind.command_move_cursor),

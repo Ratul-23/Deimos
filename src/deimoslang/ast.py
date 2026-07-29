@@ -36,6 +36,7 @@ class CommandKind(Enum):
     set_zone = auto()
     toggle_combat = auto()
     restart_bot = auto()
+    restart_client = auto()
     cursor = auto()
 
 

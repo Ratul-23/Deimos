@@ -660,6 +660,7 @@ class Compiler:
                 | CommandKind.usepotion
                 | CommandKind.buypotions
                 | CommandKind.relog
+                | CommandKind.restart_client
                 | CommandKind.tozone
                 | CommandKind.cursor
                 | CommandKind.select_friend

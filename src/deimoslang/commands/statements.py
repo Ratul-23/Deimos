@@ -555,6 +555,7 @@ def parse_entity_teleport(parser: Parser) -> list[Any]:
 command(TokenKind.command_kill, CommandKind.kill, nullary, every_client=True)
 command(TokenKind.command_restart_bot, CommandKind.restart_bot, nullary, every_client=True)
 command(TokenKind.command_relog, CommandKind.relog, nullary)
+command(TokenKind.command_restart_client, CommandKind.restart_client, nullary)
 command(TokenKind.command_autopet, CommandKind.autopet, nullary)
 command(TokenKind.command_getdeck, CommandKind.getdeck, nullary)
 command(TokenKind.command_set_zone, CommandKind.set_zone, nullary)

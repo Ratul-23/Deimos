@@ -196,6 +196,7 @@ class VM:
         self.current_task: Task = self._scheduler.get_current_task()
         self._any_player_client: list[SprintyClient] = []
         self.on_toggle_combat: Callable[[bool | None], Awaitable[None]] | None = None
+        self.on_restart_client: Callable[[list[SprintyClient]], Awaitable[list[Client | None]]] | None = None
         self._timers: dict[str, float] = {}
         self._counters: dict[str, int] = {}
         self.logged_data: dict[str, dict[str, str | None]] = {"goal": {}, "quest": {}, "zone": {}}
@@ -254,6 +255,32 @@ class VM:
             return None
 
         return self._clients[num - 1]
+
+    def replace_clients(self, old: list[SprintyClient], new: list[Client | None]) -> None:
+        """Swap restarted clients back into place."""
+        if len(old) != len(new):
+            raise VMError(f"Asked to restart {len(old)} clients but got {len(new)} back")
+
+        for old_client, replacement in zip(old, new):
+            # Already dropped, or restarted twice in one command. Nothing to swap.
+            if old_client not in self._clients:
+                continue
+
+            index: int = self._clients.index(old_client)
+
+            if replacement is None:
+                logger.error(f"Client {old_client.title}: Restart failed, dropping it from the script")
+                del self._clients[index]
+
+            else:
+                upgraded: SprintyClient = upgrade_clients([replacement])[0]
+
+                # A fresh process takes the default playstyle. loadplaystyle is lost.
+                upgraded.combat_config = old_client.combat_config
+                self._clients[index] = upgraded
+
+        # A dead client cannot answer anyplayer. Its replacement never passed one.
+        self._any_player_client = [client for client in self._any_player_client if client in self._clients]
 
     async def select_friend_from_list(self, client: SprintyClient, name: str) -> bool:
         """Pick a friend from the list."""
