@@ -367,6 +367,13 @@ class GreaterExpression(BinaryExpression):
         return f"GreaterE({self.lhs}, {self.rhs})"
 
 
+class GreaterEqualExpression(BinaryExpression):
+    """Greater-or-equal, so ranges include their ends."""
+
+    def __repr__(self) -> str:
+        return f"GreaterEqE({self.lhs}, {self.rhs})"
+
+
 class AndExpression(Expression):
     """True when every operand is true."""
 
@@ -532,6 +539,7 @@ _CONDITIONS: tuple[type[Expression], ...] = (
     ConstantCheckExpression,
     EquivalentExpression,
     GreaterExpression,
+    GreaterEqualExpression,
     ContainsStringExpression,
 )
 

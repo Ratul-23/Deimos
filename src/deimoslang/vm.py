@@ -36,6 +36,7 @@ from .ast import (
     Eval,
     Expression,
     ExprKind,
+    GreaterEqualExpression,
     GreaterExpression,
     IdentExpression,
     IndexAccessExpression,
@@ -622,7 +623,7 @@ class VM:
 
                 return left / right
 
-            case GreaterExpression():
+            case GreaterExpression() | GreaterEqualExpression():
                 left: Any = await self.eval(expression.lhs, client)
                 right: Any = await self.eval(expression.rhs, client)
 
@@ -631,6 +632,9 @@ class VM:
 
                 if isinstance(right, list) and len(right) > 0:
                     right = right[0]
+
+                if isinstance(expression, GreaterEqualExpression):
+                    return left >= right
 
                 return left > right
 
