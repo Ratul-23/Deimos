@@ -17,6 +17,8 @@ from .ast import (
     ConstantDeclStmt,
     ConstantExpression,
     ConstantReferenceExpression,
+    CounterAction,
+    CounterStmt,
     DefVarStmt,
     Eval,
     Expression,
@@ -340,7 +342,7 @@ class Analyzer:
     def _sem_stmt_inner(self, stmt: Stmt) -> Stmt | None:
         """Analyse one statement, return its replacement."""
         match stmt:
-            case TimerStmt():
+            case TimerStmt() | CounterStmt():
                 return stmt
 
             case ConstantDeclStmt():
@@ -949,10 +951,32 @@ class Compiler:
                 self.emit(InstructionKind.declare_constant, [stmt.name, stmt.value])
 
             case TimerStmt():
-                if stmt.action == TimerAction.start:
-                    self.emit(InstructionKind.set_timer, stmt.timer_name)
-                else:
-                    self.emit(InstructionKind.end_timer, stmt.timer_name)
+                match stmt.action:
+                    case TimerAction.start:
+                        self.emit(InstructionKind.start_timer, stmt.timer_name)
+
+                    case TimerAction.reset:
+                        self.emit(InstructionKind.reset_timer, stmt.timer_name)
+
+                    case TimerAction.end:
+                        self.emit(InstructionKind.end_timer, stmt.timer_name)
+
+            case CounterStmt():
+                match stmt.action:
+                    case CounterAction.start:
+                        self.emit(InstructionKind.start_counter, stmt.counter_name)
+
+                    case CounterAction.reset:
+                        self.emit(InstructionKind.reset_counter, stmt.counter_name)
+
+                    case CounterAction.end:
+                        self.emit(InstructionKind.end_counter, stmt.counter_name)
+
+                    case CounterAction.add:
+                        self.emit(InstructionKind.change_counter, [stmt.counter_name, 1])
+
+                    case CounterAction.subtract:
+                        self.emit(InstructionKind.change_counter, [stmt.counter_name, -1])
 
             case StmtList():
                 for inner in stmt.stmts:

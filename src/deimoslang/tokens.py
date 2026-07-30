@@ -48,8 +48,14 @@ class TokenKind(Enum):
     keyword_and = auto()
     keyword_or = auto()
     keyword_any_player = auto()
-    keyword_settimer = auto()
+    keyword_starttimer = auto()
+    keyword_resettimer = auto()
     keyword_endtimer = auto()
+    keyword_startcounter = auto()
+    keyword_resetcounter = auto()
+    keyword_endcounter = auto()
+    keyword_addone = auto()
+    keyword_minusone = auto()
     keyword_same_any = auto()
     keyword_isbetween = auto()
     keyword_con = auto()
@@ -131,6 +137,7 @@ class TokenKind(Enum):
     command_expr_playercount = auto()
     command_expr_playercountabove = auto()
     command_expr_playercountbelow = auto()
+    command_expr_counter = auto()
 
     command_expr_tracking_quest = auto()
     command_expr_tracking_goal = auto()
@@ -206,12 +213,22 @@ _SYNTAX_KEYWORDS: tuple[tuple[str, TokenKind], ...] = (
     ("any", TokenKind.keyword_any_player),
     ("anyplayer", TokenKind.keyword_any_player),
     ("anyclient", TokenKind.keyword_any_player),
-    ("createtimer", TokenKind.keyword_settimer),
-    ("starttimer", TokenKind.keyword_settimer),
-    ("logtimer", TokenKind.keyword_settimer),
+    ("starttimer", TokenKind.keyword_starttimer),
+    ("createtimer", TokenKind.keyword_starttimer),
+    ("settimer", TokenKind.keyword_starttimer),
+    ("resettimer", TokenKind.keyword_resettimer),
     ("endtimer", TokenKind.keyword_endtimer),
     ("canceltimer", TokenKind.keyword_endtimer),
     ("stoptimer", TokenKind.keyword_endtimer),
+    ("startcounter", TokenKind.keyword_startcounter),
+    ("createcounter", TokenKind.keyword_startcounter),
+    ("setcounter", TokenKind.keyword_startcounter),
+    ("resetcounter", TokenKind.keyword_resetcounter),
+    ("endcounter", TokenKind.keyword_endcounter),
+    ("cancelcounter", TokenKind.keyword_endcounter),
+    ("stopcounter", TokenKind.keyword_endcounter),
+    ("addone", TokenKind.keyword_addone),
+    ("minusone", TokenKind.keyword_minusone),
     ("sameany", TokenKind.keyword_same_any),
     ("sameanyplayer", TokenKind.keyword_same_any),
     ("sameanyclient", TokenKind.keyword_same_any),
@@ -338,6 +355,7 @@ _EXPRESSION_COMMANDS: tuple[tuple[str, TokenKind], ...] = (
     ("clientcountabove", TokenKind.command_expr_playercountabove),
     ("playercountbelow", TokenKind.command_expr_playercountbelow),
     ("clientcountbelow", TokenKind.command_expr_playercountbelow),
+    ("counter", TokenKind.command_expr_counter),
     ("trackingquest", TokenKind.command_expr_tracking_quest),
     ("trackinggoal", TokenKind.command_expr_tracking_goal),
     ("questchanged", TokenKind.command_expr_quest_changed),

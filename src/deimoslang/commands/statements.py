@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from wizwalker import Keycode
@@ -321,6 +321,7 @@ class _LogValue:
     template: str
     reads: tuple[EvalKind, ...]
     takes_window_path: bool = False
+    takes_name: bool = False
     is_constant: bool = False
 
 
@@ -336,6 +337,7 @@ _LOG_VALUES: dict[TokenKind, _LogValue] = {
         LogKind.multi, "potioncount", "%d/%d", (EvalKind.potioncount, EvalKind.max_potioncount)
     ),
     TokenKind.command_expr_playercount: _LogValue(LogKind.single, "playercount", "%d", (EvalKind.playercount,)),
+    TokenKind.command_expr_counter: _LogValue(LogKind.single, "counter", "%d", (EvalKind.counter,), takes_name=True),
     TokenKind.command_expr_account_level: _LogValue(LogKind.multi, "accountlevel", "%d", (EvalKind.account_level,)),
     TokenKind.command_expr_duel_round: _LogValue(LogKind.multi, "duelround", "%d", (EvalKind.duel_round,)),
     TokenKind.command_expr_any_player_list: _LogValue(
@@ -382,6 +384,12 @@ def _read_log_value(parser: Parser) -> tuple[_LogValue, list[Expression]] | None
     if value.takes_window_path:
         window_path: list[str] | Expression = parser.parse_window_path()
         return value, [Eval(value.reads[0], [window_path])]
+
+    # The name is part of what a counter is called. Join the label.
+    if value.takes_name:
+        name: IdentExpression = parser.consume_any_ident()
+        named: _LogValue = replace(value, label=f"{value.label} {name.ident}")
+        return named, [Eval(value.reads[0], [StringExpression(name.ident)])]
 
     return value, [Eval(read) for read in value.reads]
 

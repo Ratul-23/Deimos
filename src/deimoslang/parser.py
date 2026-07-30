@@ -13,6 +13,8 @@ from .ast import (
     ConstantDeclStmt,
     ConstantExpression,
     ConstantReferenceExpression,
+    CounterAction,
+    CounterStmt,
     DivideExpression,
     EquivalentExpression,
     Eval,
@@ -58,6 +60,22 @@ from .tokens import describe, describe_any
 
 class ParserError(DeimosLangError):
     """Tokens do not form valid syntax."""
+
+
+# All parse the same, only the action differs.
+_TIMER_ACTIONS: dict[TokenKind, TimerAction] = {
+    TokenKind.keyword_starttimer: TimerAction.start,
+    TokenKind.keyword_resettimer: TimerAction.reset,
+    TokenKind.keyword_endtimer: TimerAction.end,
+}
+
+_COUNTER_ACTIONS: dict[TokenKind, CounterAction] = {
+    TokenKind.keyword_startcounter: CounterAction.start,
+    TokenKind.keyword_resetcounter: CounterAction.reset,
+    TokenKind.keyword_endcounter: CounterAction.end,
+    TokenKind.keyword_addone: CounterAction.add,
+    TokenKind.keyword_minusone: CounterAction.subtract,
+}
 
 
 class Parser:
@@ -1037,17 +1055,25 @@ class Parser:
                 self.end_line()
                 return ConstantDeclStmt(var_name, expr)
 
-            case TokenKind.keyword_settimer:
+            case TokenKind.keyword_starttimer | TokenKind.keyword_resettimer | TokenKind.keyword_endtimer:
+                timer_action: TimerAction = _TIMER_ACTIONS[self.tokens[self.pos].kind]
                 self.pos += 1
                 timer_name: IdentExpression = self.consume_any_ident()
                 self.end_line()
-                return TimerStmt(TimerAction.start, timer_name.ident)
+                return TimerStmt(timer_action, timer_name.ident)
 
-            case TokenKind.keyword_endtimer:
+            case (
+                TokenKind.keyword_startcounter
+                | TokenKind.keyword_resetcounter
+                | TokenKind.keyword_endcounter
+                | TokenKind.keyword_addone
+                | TokenKind.keyword_minusone
+            ):
+                action: CounterAction = _COUNTER_ACTIONS[self.tokens[self.pos].kind]
                 self.pos += 1
-                timer_name: IdentExpression = self.consume_any_ident()
+                counter_name: IdentExpression = self.consume_any_ident()
                 self.end_line()
-                return TimerStmt(TimerAction.end, timer_name.ident)
+                return CounterStmt(action, counter_name.ident)
 
             case TokenKind.keyword_block:
                 self.pos += 1

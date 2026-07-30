@@ -168,6 +168,7 @@ class VM:
         self._any_player_client: list[SprintyClient] = []
         self.on_toggle_combat: Callable[[bool | None], Awaitable[None]] | None = None
         self._timers: dict[str, float] = {}
+        self._counters: dict[str, int] = {}
         self.logged_data: dict[str, dict[str, str | None]] = {"goal": {}, "quest": {}, "zone": {}}
 
         # True and False are defined up front so `$True` and `$False` resolve without being declared.
@@ -188,6 +189,7 @@ class VM:
         self.current_task = self._scheduler.get_current_task()
         self._until_infos = []
         self._timers = {}
+        self._counters = {}
         self._any_player_client = []
         self._constants = {
             "True": True,
@@ -873,30 +875,79 @@ class VM:
                 await self.define_constant(name, value)
                 self.current_task.ip += 1
 
-            case InstructionKind.set_timer:
+            case InstructionKind.start_timer:
                 assert isinstance(instruction.data, str), "Timer name must be a string"
                 timer_name: str = instruction.data
                 self._timers[timer_name] = asyncio.get_event_loop().time()
                 logger.debug(f"Timer '{timer_name}' started")
                 self.current_task.ip += 1
 
+            case InstructionKind.reset_timer:
+                assert isinstance(instruction.data, str), "Timer name must be a string"
+                timer_name = instruction.data
+
+                if timer_name not in self._timers:
+                    raise VMError(f"Timer '{timer_name}' was never started")
+
+                self._timers[timer_name] = asyncio.get_event_loop().time()
+                logger.debug(f"Timer '{timer_name}' reset")
+                self.current_task.ip += 1
+
             case InstructionKind.end_timer:
                 assert isinstance(instruction.data, str), "Timer name must be a string"
                 timer_name = instruction.data
 
-                if timer_name in self._timers:
-                    elapsed_seconds: float = asyncio.get_event_loop().time() - self._timers[timer_name]
-                    hours, remainder = divmod(int(elapsed_seconds), 3600)
-                    minutes, seconds = divmod(remainder, 60)
+                if timer_name not in self._timers:
+                    raise VMError(f"Timer '{timer_name}' was never started")
 
-                    time_str: str = f"{hours:02}:{minutes:02}:{seconds:02}"
+                elapsed_seconds: float = asyncio.get_event_loop().time() - self._timers[timer_name]
+                hours, remainder = divmod(int(elapsed_seconds), 3600)
+                minutes, seconds = divmod(remainder, 60)
 
-                    logger.debug(f"Timer '{timer_name}' ended - Elapsed time: {time_str}")
-                    del self._timers[timer_name]
+                time_str: str = f"{hours:02}:{minutes:02}:{seconds:02}"
 
-                else:
-                    logger.warning(f"Attempted to end timer '{timer_name}' that was never started")
+                logger.debug(f"Timer '{timer_name}' ended - Elapsed time: {time_str}")
+                del self._timers[timer_name]
+                self.current_task.ip += 1
 
+            case InstructionKind.start_counter:
+                assert isinstance(instruction.data, str), "Counter name must be a string"
+                counter_name: str = instruction.data
+                self._counters[counter_name] = 0
+                logger.debug(f"Counter '{counter_name}' started")
+                self.current_task.ip += 1
+
+            case InstructionKind.reset_counter:
+                assert isinstance(instruction.data, str), "Counter name must be a string"
+                counter_name = instruction.data
+
+                if counter_name not in self._counters:
+                    raise VMError(f"Counter '{counter_name}' was never started")
+
+                self._counters[counter_name] = 0
+                logger.debug(f"Counter '{counter_name}' reset")
+                self.current_task.ip += 1
+
+            case InstructionKind.end_counter:
+                assert isinstance(instruction.data, str), "Counter name must be a string"
+                counter_name = instruction.data
+
+                if counter_name not in self._counters:
+                    raise VMError(f"Counter '{counter_name}' was never started")
+
+                logger.debug(f"Counter '{counter_name}' ended - {self._counters[counter_name]}")
+                del self._counters[counter_name]
+                self.current_task.ip += 1
+
+            case InstructionKind.change_counter:
+                assert isinstance(instruction.data, list)
+                counter_name, delta = instruction.data
+
+                # Changing an unstarted counter is a typo, not a new counter.
+                if counter_name not in self._counters:
+                    raise VMError(f"Counter '{counter_name}' was never started")
+
+                self._counters[counter_name] += delta
                 self.current_task.ip += 1
 
             case InstructionKind.jump:
