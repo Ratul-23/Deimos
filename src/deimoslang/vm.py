@@ -66,6 +66,7 @@ from .commands import STATS as EXPR_STATS
 from .commands.handlers import Handler, InstructionHandler
 from .commands.predicates import Predicate, StatEvaluator, StatValue
 from .compiler import Compiler
+from .lexer import LineInfo
 
 
 class Task:
@@ -101,23 +102,34 @@ class Scheduler:
         self.current_task_index = (self.current_task_index + 1) % len(self.tasks)
 
 
-def _sole_vm_error(error_group: BaseExceptionGroup) -> VMError | None:
-    """The one VMError a task group wraps, or None when it holds anything else."""
-    leaves: list[BaseException] = []
-    pending: list[BaseException] = list(error_group.exceptions)
+def _error_leaves(error: BaseException) -> list[BaseException]:
+    """Every plain error inside a group."""
+    if isinstance(error, BaseExceptionGroup):
+        return [leaf for inner in error.exceptions for leaf in _error_leaves(inner)]
 
-    while pending:
-        error: BaseException = pending.pop()
+    return [error]
 
-        if isinstance(error, BaseExceptionGroup):
-            pending.extend(error.exceptions)
-        else:
-            leaves.append(error)
 
-    if len(leaves) == 1 and isinstance(leaves[0], VMError):
-        return leaves[0]
+def _vm_error_from_group(error_group: BaseExceptionGroup) -> VMError | None:
+    """One VMError for a group's many."""
+    leaves: list[BaseException] = _error_leaves(error_group)
+    vm_errors: list[VMError] = [error for error in leaves if isinstance(error, VMError)]
 
-    return None
+    # Anything else is a Deimos fault. Group says more.
+    if not vm_errors or len(vm_errors) != len(leaves):
+        return None
+
+    # Mass fails the same way per client.
+    messages: list[str] = []
+
+    for error in vm_errors:
+        if error.message not in messages:
+            messages.append(error.message)
+
+    if len(messages) == 1:
+        return vm_errors[0]
+
+    return VMError("; ".join(messages))
 
 
 def _as_bool(value: Any) -> Any:
@@ -131,11 +143,14 @@ def _as_bool(value: Any) -> Any:
 class UntilInfo:
     """A running `until` and its exit."""
 
-    def __init__(self, expr: Expression, id: int, exit_point: int, stack_size: int) -> None:
+    def __init__(
+        self, expr: Expression, id: int, exit_point: int, stack_size: int, line_info: LineInfo | None = None
+    ) -> None:
         self.expr: Expression = expr
         self.id: int = id
         self.exit_point: int = exit_point
         self.stack_size: int = stack_size
+        self.line_info: LineInfo | None = line_info
 
 
 class VM:
@@ -192,9 +207,9 @@ class VM:
         """Set a constant to whatever was written, without reading anything into it."""
         self._constants[name] = value
 
-    def load_from_text(self, code: str) -> None:
+    def load_from_text(self, code: str, filename: str | None = None) -> None:
         """Compile source text into a program."""
-        compiler: Compiler = Compiler.from_text(code)
+        compiler: Compiler = Compiler.from_text(code, filename=filename)
         self.program = compiler.compile()
 
     def player_by_num(self, num: int) -> SprintyClient | None:
@@ -778,12 +793,12 @@ class VM:
 
         # Handlers drive clients through a task group, which buries the reason.
         except BaseExceptionGroup as error_group:
-            sole_error: VMError | None = _sole_vm_error(error_group)
+            script_error: VMError | None = _vm_error_from_group(error_group)
 
-            if sole_error is None:
+            if script_error is None:
                 raise
 
-            raise sole_error from None
+            raise script_error from None
 
     async def _process_untils(self) -> None:
         """Jump out if an `until` holds."""
@@ -797,7 +812,8 @@ class VM:
                     return
 
             except VMError as error:
-                logger.warning(f"Leaving an until region because its condition could not be read: {error}")
+                error.locate(info.line_info)
+                logger.warning(f"Leaving an until region because its condition could not be read: {error.brief()}")
                 self.current_task.ip = info.exit_point
                 return
 
@@ -818,10 +834,16 @@ class VM:
         instr_handler: InstructionHandler | None = INSTRUCTION_HANDLERS.get(instruction.kind.name)
 
         # Every handler moves the pointer itself. Jumps decide where it lands.
-        if instr_handler is not None:
-            await instr_handler(InstructionContext(vm=self, instruction=instruction))
-        else:
-            await self._exec_instruction(instruction)
+        try:
+            if instr_handler is not None:
+                await instr_handler(InstructionContext(vm=self, instruction=instruction))
+            else:
+                await self._exec_instruction(instruction)
+
+        # Nothing deeper knows the line.
+        except VMError as error:
+            error.locate(instruction.line_info)
+            raise
 
         if self.current_task.ip >= len(self.program):
             self.current_task.running = False
@@ -889,7 +911,8 @@ class VM:
 
                 # An unreadable condition takes the forward branch. The bot never stalls.
                 except VMError as error:
-                    logger.warning(f"Could not read a condition, taking the forward branch: {error}")
+                    error.locate(instruction.line_info)
+                    logger.warning(f"Could not read a condition, taking the forward branch: {error.brief()}")
 
                     if instruction.data[1] > 1:
                         self.current_task.ip += instruction.data[1]
@@ -907,7 +930,8 @@ class VM:
                         self.current_task.ip += instruction.data[1]
 
                 except VMError as error:
-                    logger.warning(f"Could not read a condition, entering the loop body: {error}")
+                    error.locate(instruction.line_info)
+                    logger.warning(f"Could not read a condition, entering the loop body: {error.brief()}")
                     self.current_task.ip += 1
 
             # The stack doubles as the return stack. A call pushes where to come back.
@@ -927,6 +951,7 @@ class VM:
                         id=instruction.data[1],
                         exit_point=self.current_task.ip + instruction.data[2],
                         stack_size=len(self.current_task.stack),
+                        line_info=instruction.line_info,
                     )
                 )
                 self.current_task.ip += 1

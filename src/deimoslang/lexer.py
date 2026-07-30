@@ -1,4 +1,4 @@
-"""Turns bot source text into a stream of tokens."""
+"""Tokens, and the errors scripts cause."""
 
 from typing import Any, Never
 
@@ -6,10 +6,6 @@ from .tokens import KEYWORDS, TokenKind
 
 # float is a number, list[str] a path, int a client number.
 type TokenValue = float | str | list[str] | int | None
-
-
-class TokenizerError(Exception):
-    """Raised when source text cannot be tokenized."""
 
 
 class Percent(float):
@@ -20,7 +16,13 @@ class LineInfo:
     """Where a token came from."""
 
     def __init__(
-        self, line: int, column: int, last_column: int, last_line: int | None = None, filename: str | None = None
+        self,
+        line: int,
+        column: int,
+        last_column: int,
+        last_line: int | None = None,
+        filename: str | None = None,
+        source_line: str | None = None,
     ) -> None:
         self.line: int = line
         self.column: int = column
@@ -28,11 +30,67 @@ class LineInfo:
         self.filename: str | None = filename
         self.last_line: int = last_line if last_line is not None else line
 
+        # One string per line, shared. Free to carry.
+        self.source_line: str | None = source_line
+
+    def location(self) -> str:
+        """The file and line, as text."""
+        if self.filename is None:
+            return f"Line: {self.line}"
+
+        return f"{self.filename}, Line: {self.line}"
+
+    def render(self) -> str:
+        """The source line and a caret."""
+        if self.source_line is None:
+            return self.location()
+
+        prefix: str = self.source_line[: self.column - 1]
+
+        # Tabs stay tabs, or the caret lands short.
+        caret_indent: str = "".join("\t" if char == "\t" else " " for char in prefix)
+        return f"{self.source_line}\n{caret_indent}^\n{self.location()}"
+
     def __repr__(self) -> str:
         if self.filename is not None:
             return f"{self.filename}:{self.line}:{self.column}-{self.last_column}"
 
         return f"{self.line}:{self.column}-{self.last_column}"
+
+
+class DeimosLangError(Exception):
+    """Base for errors a script causes."""
+
+
+class TokenizerError(DeimosLangError):
+    """Source text cannot be tokenized."""
+
+
+class LocatedError(DeimosLangError):
+    """An error that shows its line."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message: str = message
+        self.line_info: LineInfo | None = None
+
+    def locate(self, line_info: LineInfo | None) -> None:
+        """Attach a location, keeping the first."""
+        if self.line_info is None:
+            self.line_info = line_info
+
+    def brief(self) -> str:
+        """Message and line, on one line."""
+        if self.line_info is None:
+            return self.message
+
+        return f"{self.message} ({self.line_info.location()})"
+
+    def __str__(self) -> str:
+        if self.line_info is None:
+            return self.message
+
+        return f"{self.message}\n{self.line_info.render()}"
 
 
 class Token:
@@ -46,20 +104,6 @@ class Token:
 
     def __repr__(self) -> str:
         return f"{self.line_info} {self.kind.name}`{self.literal}`({self.value})"
-
-
-def render_tokens(toks: list[Token]) -> str:
-    """Re-render tokens as source text, for error messages."""
-    lines_strs: dict[int, str] = {}
-
-    for tok in toks:
-        if tok.line_info.line not in lines_strs:
-            lines_strs[tok.line_info.line] = ""
-
-        spaces: str = " " * (tok.line_info.column - 1 - len(lines_strs[tok.line_info.line]))
-        lines_strs[tok.line_info.line] += spaces + tok.literal
-
-    return "\n".join(lines_strs.values())
 
 
 def normalize_ident(dirty: str) -> str:
@@ -84,14 +128,24 @@ class Tokenizer:
             """Append a token at this spot."""
             # END_LINE carries no text. Widen the span or last column precedes first.
             line_info: LineInfo = LineInfo(
-                line=line_num, column=pos + 1, last_column=pos + max(len(literal), 1), filename=filename
+                line=line_num,
+                column=pos + 1,
+                last_column=pos + max(len(literal), 1),
+                filename=filename,
+                source_line=line,
             )
             result.append(Token(kind, literal, line_info, value))
 
         def err(message: str, column_start: int) -> Never:
             """Raise a TokenizerError at a column."""
-            indent_start: str = " " * column_start
-            raise TokenizerError(f"{message}\n{line}\n{indent_start}^\nLine: {line_num} | Column: {column_start + 1}")
+            line_info: LineInfo = LineInfo(
+                line=line_num,
+                column=column_start + 1,
+                last_column=column_start + 1,
+                filename=filename,
+                source_line=line,
+            )
+            raise TokenizerError(f"{message}\n{line_info.render()}")
 
         while pos < len(line):
             char: str = line[pos]
@@ -218,7 +272,7 @@ class Tokenizer:
                         self._multiline_buffer = char
                         self._in_multiline_string = True
                         self._multiline_start_line_info = LineInfo(
-                            line=line_num, column=pos + 1, last_column=pos + 1, filename=filename
+                            line=line_num, column=pos + 1, last_column=pos + 1, filename=filename, source_line=line
                         )
                         pos += 1
 

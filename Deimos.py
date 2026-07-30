@@ -43,7 +43,7 @@ from src.config_combat import (
     default_config,
     delegate_combat_configs,
 )
-from src.deimoslang import vm
+from src.deimoslang import DeimosLangError, VMError, vm
 from src.drop_logger import logging_loop
 from src.entity_collision import get_world_display_name, get_zone_display_name
 from src.gui import GUIKeys
@@ -3276,6 +3276,13 @@ async def main():
                                             v.running = True
                                             while v.running:
                                                 await v.step()
+                                        # Script mistake, not a Deimos fault.
+                                        except VMError as script_error:
+                                            logger.error(str(script_error))
+                                        # Never compiles. Retry only spams.
+                                        except DeimosLangError as script_error:
+                                            logger.error(str(script_error))
+                                            v.kill()
                                         except Exception as e:
                                             logger.exception(e)
                                         v.running = False

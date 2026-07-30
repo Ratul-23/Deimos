@@ -3,6 +3,8 @@
 from enum import Enum, auto
 from typing import Any
 
+from .lexer import LineInfo, LocatedError
+
 
 class CommandKind(Enum):
     """What a statement command does."""
@@ -210,6 +212,9 @@ class Command:
         self.kind: CommandKind = CommandKind.invalid
         self.data: list[Any] = []
         self.player_selector: PlayerSelector | None = None
+
+        # Own line, so && halves point at themselves.
+        self.line_info: LineInfo | None = None
 
     def __repr__(self) -> str:
         params_str: str = ", ".join([str(item) for item in self.data])
@@ -550,6 +555,9 @@ def describe_expression(expr: Expression) -> str:
 class Stmt:
     """Base for anything the compiler emits."""
 
+    # Here, so no subclass has to take one.
+    line_info: LineInfo | None = None
+
 
 class ConstantDeclStmt(Stmt):
     """A `con name = value` declaration."""
@@ -762,7 +770,7 @@ class Symbol:
 
 
 # This lives here rather than in vm.py because the command modules raise it, and vm.py imports them.
-class VMError(Exception):
+class VMError(LocatedError):
     """An instruction cannot be carried out."""
 
 
@@ -811,9 +819,10 @@ class InstructionKind(Enum):
 class Instruction:
     """One instruction and its kind-dependent payload."""
 
-    def __init__(self, kind: InstructionKind, data: Any = None) -> None:
+    def __init__(self, kind: InstructionKind, data: Any = None, line_info: LineInfo | None = None) -> None:
         self.kind: InstructionKind = kind
         self.data: Any = data
+        self.line_info: LineInfo | None = line_info
 
     def __repr__(self) -> str:
         if self.data is not None:

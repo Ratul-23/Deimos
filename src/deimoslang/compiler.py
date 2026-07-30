@@ -59,11 +59,11 @@ from .ast import (
     WriteVarStmt,
     XYZExpression,
 )
-from .lexer import Tokenizer
+from .lexer import LineInfo, LocatedError, Tokenizer
 from .parser import Parser
 
 
-class SemError(Exception):
+class SemError(LocatedError):
     """A parsed program makes no sense."""
 
 
@@ -323,6 +323,21 @@ class Analyzer:
         stmt.mixins = set()
 
     def sem_stmt(self, stmt: Stmt) -> Stmt | None:
+        """Analyse one statement, keeping its line."""
+        try:
+            result: Stmt | None = self._sem_stmt_inner(stmt)
+
+        except SemError as error:
+            error.locate(stmt.line_info)
+            raise
+
+        # Desugared statements keep the line they replaced.
+        if result is not None and result.line_info is None:
+            result.line_info = stmt.line_info
+
+        return result
+
+    def _sem_stmt_inner(self, stmt: Stmt) -> Stmt | None:
         """Analyse one statement, return its replacement."""
         match stmt:
             case TimerStmt():
@@ -517,7 +532,7 @@ class Analyzer:
         self.stmts = res
 
 
-class CompilerError(Exception):
+class CompilerError(LocatedError):
     """A valid program cannot be lowered."""
 
 
@@ -555,12 +570,13 @@ class Compiler:
         self._stacks: list[StackInfo] = [StackInfo()]
         self._loop_label_stack: list[Symbol] = []
         self._outermost_until: int | None = None
+        self._current_line: LineInfo | None = None
 
     @staticmethod
-    def from_text(code: str) -> "Compiler":
+    def from_text(code: str, filename: str | None = None) -> "Compiler":
         """Lex, parse and analyse source text."""
         tokenizer: Tokenizer = Tokenizer()
-        parser: Parser = Parser(tokenizer.tokenize(code))
+        parser: Parser = Parser(tokenizer.tokenize(code, filename=filename))
         analyzer: Analyzer = Analyzer(parser.parse())
         analyzer.analyze_program()
         return Compiler(analyzer=analyzer)
@@ -587,8 +603,8 @@ class Compiler:
         raise CompilerError(f"Failed to determine the stack location for symbol {sym}")
 
     def emit(self, kind: InstructionKind, data: Any = None) -> None:
-        """Append one instruction."""
-        self._program.append(Instruction(kind, data))
+        """Append one instruction with its line."""
+        self._program.append(Instruction(kind, data, self._current_line))
 
     def gen_label(self, name: str = "anonymous") -> Symbol:
         """Create a fresh jump label."""
@@ -606,6 +622,10 @@ class Compiler:
                 self.compile_command(cmd)
 
             return
+
+        # `_compile` restores it, so this cannot leak.
+        if com.line_info is not None:
+            self._current_line = com.line_info
 
         match com.kind:
             case CommandKind.restart_bot:
@@ -904,6 +924,24 @@ class Compiler:
                 raise CompilerError(f"Unhandled expression type: {expr}")
 
     def _compile(self, stmt: Stmt) -> None:
+        """Tag the line, then emit."""
+        previous_line: LineInfo | None = self._current_line
+
+        # Synthesized statements keep the enclosing line.
+        if stmt.line_info is not None:
+            self._current_line = stmt.line_info
+
+        try:
+            self._compile_inner(stmt)
+
+        except CompilerError as error:
+            error.locate(self._current_line)
+            raise
+
+        finally:
+            self._current_line = previous_line
+
+    def _compile_inner(self, stmt: Stmt) -> None:
         """Emit code for one statement."""
         match stmt:
             case ConstantDeclStmt():

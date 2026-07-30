@@ -994,7 +994,8 @@ class PyQtSink:
         def collapse_log(input: str) -> str:
             if "-" not in input:
                 return input
-            split_input = input.split("-")
+            # Cut prefix dashes only. Message keeps its own.
+            split_input = input.split("-", 3)
             if len(split_input) < 4:
                 return input
             return split_input[3].lstrip()
