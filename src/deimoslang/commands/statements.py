@@ -11,6 +11,7 @@ from wizwalker import Keycode
 from ..ast import (
     ClickKind,
     CommandKind,
+    ConstantReferenceExpression,
     CursorKind,
     Eval,
     EvalKind,
@@ -97,6 +98,15 @@ def _looks_like_xyz(parser: Parser) -> bool:
     return parser.tokens[parser.pos].kind == TokenKind.keyword_xyz
 
 
+def _starts_window_path(parser: Parser, pos: int) -> bool:
+    """Whether a [bracketed] path or a $constant naming one begins at `pos`."""
+    if pos >= len(parser.tokens):
+        return False
+
+    token: Token = parser.tokens[pos]
+    return token.kind == TokenKind.square_open or (token.kind == TokenKind.identifier and token.literal.startswith("$"))
+
+
 def _position(parser: Parser) -> Expression:
     """Parse a position."""
     if _looks_like_xyz(parser):
@@ -127,12 +137,7 @@ def prefixed_window_or_expression(prefix: Discriminator) -> ArgShape:
 
     def shape(parser: Parser) -> list[Any]:
         """Parse the path after the tag."""
-        token: Token = parser.tokens[parser.pos]
-
-        # A [bracketed] path or a $constant naming one is a window path, anything else is an expression.
-        if token.kind == TokenKind.square_open or (
-            token.kind == TokenKind.identifier and token.literal.startswith("$")
-        ):
+        if _starts_window_path(parser, parser.pos):
             return [prefix, parser.parse_window_path()]
 
         expr: Expression = parser.parse_expression()
@@ -307,108 +312,138 @@ def greedy_name(parser: Parser) -> list[Any]:
     return [" ".join(parts)]
 
 
+@dataclass(frozen=True)
+class _LogValue:
+    """One value `log` can print."""
+
+    kind: LogKind
+    label: str
+    template: str
+    reads: tuple[EvalKind, ...]
+    takes_window_path: bool = False
+    is_constant: bool = False
+
+
+_LOG_VALUES: dict[TokenKind, _LogValue] = {
+    TokenKind.command_expr_health: _LogValue(LogKind.multi, "health", "%d/%d", (EvalKind.health, EvalKind.max_health)),
+    TokenKind.command_expr_mana: _LogValue(LogKind.multi, "mana", "%d/%d", (EvalKind.mana, EvalKind.max_mana)),
+    TokenKind.command_expr_energy: _LogValue(LogKind.multi, "energy", "%d/%d", (EvalKind.energy, EvalKind.max_energy)),
+    TokenKind.command_expr_bagcount: _LogValue(
+        LogKind.multi, "bagcount", "%d/%d", (EvalKind.bagcount, EvalKind.max_bagcount)
+    ),
+    TokenKind.command_expr_gold: _LogValue(LogKind.multi, "gold", "%d/%d", (EvalKind.gold, EvalKind.max_gold)),
+    TokenKind.command_expr_potion_count: _LogValue(
+        LogKind.multi, "potioncount", "%d/%d", (EvalKind.potioncount, EvalKind.max_potioncount)
+    ),
+    TokenKind.command_expr_playercount: _LogValue(LogKind.single, "playercount", "%d", (EvalKind.playercount,)),
+    TokenKind.command_expr_account_level: _LogValue(LogKind.multi, "accountlevel", "%d", (EvalKind.account_level,)),
+    TokenKind.command_expr_duel_round: _LogValue(LogKind.multi, "duelround", "%d", (EvalKind.duel_round,)),
+    TokenKind.command_expr_any_player_list: _LogValue(
+        LogKind.single, "clients using anyplayer", "%s", (EvalKind.any_player_list,)
+    ),
+    TokenKind.command_expr_window_text: _LogValue(
+        LogKind.multi, "windowtext", "%s", (EvalKind.windowtext,), takes_window_path=True
+    ),
+    TokenKind.command_expr_window_num: _LogValue(
+        LogKind.multi, "windownum", "%s", (EvalKind.windownum,), takes_window_path=True
+    ),
+}
+
+
+def _read_log_value_kind(parser: Parser, pos: int) -> _LogValue | None:
+    """What the token at `pos` prints."""
+    token: Token = parser.tokens[pos]
+
+    # Spelled as plain words, so not in the table.
+    if token.kind == TokenKind.identifier:
+        if token.literal == "window" and _starts_window_path(parser, pos + 1):
+            return _LOG_VALUES[TokenKind.command_expr_window_text]
+
+        if token.literal.startswith("$"):
+            return _LogValue(LogKind.single, token.literal[1:], "%s", (), is_constant=True)
+
+        return None
+
+    return _LOG_VALUES.get(token.kind)
+
+
+def _read_log_value(parser: Parser) -> tuple[_LogValue, list[Expression]] | None:
+    """Consume the next token as a value."""
+    value: _LogValue | None = _read_log_value_kind(parser, parser.pos)
+
+    if value is None:
+        return None
+
+    parser.pos += 1
+
+    if value.is_constant:
+        return value, [ConstantReferenceExpression(value.label)]
+
+    if value.takes_window_path:
+        window_path: list[str] | Expression = parser.parse_window_path()
+        return value, [Eval(value.reads[0], [window_path])]
+
+    return value, [Eval(read) for read in value.reads]
+
+
+def _literal_text(token: Token) -> str:
+    """How a token reads as text."""
+    return token.value if token.kind == TokenKind.string else token.literal
+
+
+def _all_literal(parser: Parser) -> list[Any]:
+    """Join the line into one string."""
+    parts: list[str] = []
+
+    while parser.pos < len(parser.tokens) and parser.tokens[parser.pos].kind != TokenKind.END_LINE:
+        parts.append(_literal_text(parser.tokens[parser.pos]))
+        parser.pos += 1
+
+    return [LogKind.single, StringExpression(" ".join(parts))]
+
+
 def parse_log(parser: Parser) -> list[Any]:
-    """Parse `log`, dispatching on the next token."""
-    kind: TokenKind = parser.tokens[parser.pos].kind
+    """Parse `log`, words mixed with values."""
+    # Opening on a bare word means a sentence.
+    if parser.tokens[parser.pos].kind != TokenKind.string and _read_log_value_kind(parser, parser.pos) is None:
+        return _all_literal(parser)
 
-    def print_literal() -> list[Any]:
-        """Join the rest of the line into one string to log."""
-        parts: list[str] = []
+    pieces: list[str | tuple[_LogValue, list[Expression]]] = []
 
-        while parser.pos < len(parser.tokens) and parser.tokens[parser.pos].kind != TokenKind.END_LINE:
-            tok: Token = parser.tokens[parser.pos]
+    while parser.pos < len(parser.tokens) and parser.tokens[parser.pos].kind != TokenKind.END_LINE:
+        read: tuple[_LogValue, list[Expression]] | None = _read_log_value(parser)
 
-            match tok.kind:
-                case TokenKind.string:
-                    parts.append(tok.value)
-                case _:
-                    parts.append(tok.literal)
+        if read is not None:
+            pieces.append(read)
+            continue
 
-            parser.pos += 1
+        pieces.append(_literal_text(parser.tokens[parser.pos]))
+        parser.pos += 1
 
-        return [LogKind.single, StringExpression(" ".join(parts))]
+    values: list[tuple[_LogValue, list[Expression]]] = [piece for piece in pieces if not isinstance(piece, str)]
 
-    match kind:
-        case TokenKind.identifier:
-            # `log window [path]` reads the text out of that window.
-            if parser.tokens[parser.pos].literal == "window":
-                parser.pos += 1
-                window_path: list[str] | Expression = parser.parse_window_path()
-                return [LogKind.multi, StrFormatExpression("windowtext: %s", Eval(EvalKind.windowtext, [window_path]))]
+    if not values:
+        return [LogKind.single, StringExpression(" ".join(str(piece) for piece in pieces))]
 
-            # A $constant logs the value behind the name, not the name itself.
-            if parser.tokens[parser.pos].literal.startswith("$"):
-                ident: str = parser.tokens[parser.pos].literal
-                parser.pos += 1
-                const_name: str = ident[1:]
-                return [LogKind.single, IdentExpression(const_name)]
+    # Nothing written says what it is. Name it.
+    if len(pieces) == 1:
+        value, reads = values[0]
 
-            return print_literal()
+        # Keeps its old `name = value` shape.
+        if value.is_constant:
+            return [value.kind, IdentExpression(value.label)]
 
-        case TokenKind.command_expr_bagcount:
-            parser.pos += 1
-            return [
-                LogKind.multi,
-                StrFormatExpression("bagcount: %d/%d", Eval(EvalKind.bagcount), Eval(EvalKind.max_bagcount)),
-            ]
+        return [value.kind, StrFormatExpression(f"{value.label}: {value.template}", *reads)]
 
-        case TokenKind.command_expr_mana:
-            parser.pos += 1
-            return [LogKind.multi, StrFormatExpression("mana: %d/%d", Eval(EvalKind.mana), Eval(EvalKind.max_mana))]
+    # Script text, not a placeholder. Double it.
+    template: str = " ".join(
+        piece.replace("%", "%%") if isinstance(piece, str) else piece[0].template for piece in pieces
+    )
+    reads = [read for _, value_reads in values for read in value_reads]
 
-        case TokenKind.command_expr_energy:
-            parser.pos += 1
-            return [
-                LogKind.multi,
-                StrFormatExpression("energy: %d/%d", Eval(EvalKind.energy), Eval(EvalKind.max_energy)),
-            ]
-
-        case TokenKind.command_expr_health:
-            parser.pos += 1
-            return [
-                LogKind.multi,
-                StrFormatExpression("health: %d/%d", Eval(EvalKind.health), Eval(EvalKind.max_health)),
-            ]
-
-        case TokenKind.command_expr_gold:
-            parser.pos += 1
-            return [LogKind.multi, StrFormatExpression("gold: %d/%d", Eval(EvalKind.gold), Eval(EvalKind.max_gold))]
-
-        case TokenKind.command_expr_potion_count:
-            parser.pos += 1
-            return [
-                LogKind.multi,
-                StrFormatExpression("potioncount: %d/%d", Eval(EvalKind.potioncount), Eval(EvalKind.max_potioncount)),
-            ]
-
-        case TokenKind.command_expr_playercount:
-            parser.pos += 1
-            return [LogKind.single, StrFormatExpression("playercount: %d", Eval(EvalKind.playercount))]
-
-        case TokenKind.command_expr_account_level:
-            parser.pos += 1
-            return [LogKind.multi, StrFormatExpression("accountlevel: %d", Eval(EvalKind.account_level))]
-
-        case TokenKind.command_expr_duel_round:
-            parser.pos += 1
-            return [LogKind.multi, StrFormatExpression("duelround: %d", Eval(EvalKind.duel_round))]
-
-        case TokenKind.command_expr_window_text:
-            parser.pos += 1
-            window_path: list[str] | Expression = parser.parse_window_path()
-            return [LogKind.multi, StrFormatExpression("windowtext: %s", Eval(EvalKind.windowtext, [window_path]))]
-
-        case TokenKind.command_expr_window_num:
-            parser.pos += 1
-            window_path: list[str] | Expression = parser.parse_window_path()
-            return [LogKind.multi, StrFormatExpression("windownum: %s", Eval(EvalKind.windownum, [window_path]))]
-
-        case TokenKind.command_expr_any_player_list:
-            parser.pos += 1
-            return [LogKind.single, StrFormatExpression("clients using anyplayer: %s", Eval(EvalKind.any_player_list))]
-
-        case _:
-            return print_literal()
+    # One per-client value makes the whole line per client.
+    kind: LogKind = LogKind.multi if any(value.kind == LogKind.multi for value, _ in values) else LogKind.single
+    return [kind, StrFormatExpression(template, *reads)]
 
 
 def parse_teleport(parser: Parser) -> list[Any]:
