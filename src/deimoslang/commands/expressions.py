@@ -146,6 +146,14 @@ def parse_items_dropped(parser: Parser, selector: PlayerSelector, _token: TokenK
     return _command_expression(parser, selector, [ExprKind.items_dropped, _lowered(item)])
 
 
+def parse_counter(parser: Parser, selector: PlayerSelector, _token: TokenKind) -> Expression:
+    """Parse `counter <name>` and its numeric comparison."""
+    parser.pos += 1
+    name: IdentExpression = parser.consume_any_ident()
+    evaluated: Eval = Eval(EvalKind.counter, [StringExpression(name.ident)])
+    return parser.parse_numeric_comparison(evaluated, selector)
+
+
 def parse_window_num(parser: Parser, selector: PlayerSelector, _token: TokenKind) -> Expression:
     """Parse `windownum` and its numeric comparison."""
     parser.pos += 1
@@ -312,5 +320,6 @@ expr_command(
 expr_command(TokenKind.command_expr_item_dropped, parse_items_dropped)
 
 expr_command(TokenKind.command_expr_window_num, parse_window_num)
+expr_command(TokenKind.command_expr_counter, parse_counter)
 
 expr_command(TokenKind.command_expr_window_text, parse_window_text)

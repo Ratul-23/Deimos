@@ -13,7 +13,16 @@ from wizwalker.memory import DynamicClientObject, Window
 
 from ...teleport_math import calc_Distance
 from ...utils import get_window_from_path, is_visible_by_path
-from ..ast import CommandExpression, Eval, EvalKind, ExprKind, IdentExpression, PlayerSelector, VMError
+from ..ast import (
+    CommandExpression,
+    Eval,
+    EvalKind,
+    ExprKind,
+    IdentExpression,
+    PlayerSelector,
+    StringExpression,
+    VMError,
+)
 
 if TYPE_CHECKING:
     from ..vm import VM
@@ -984,6 +993,16 @@ async def read_windownum(ctx: StatContext) -> StatValue:
 async def read_playercount(ctx: StatContext) -> StatValue:
     """How many clients the VM drives."""
     return len(ctx.vm._clients)
+
+
+@stat(EvalKind.counter)
+async def read_counter(ctx: StatContext) -> StatValue:
+    """What a named counter holds."""
+    name: Any = ctx.eval.args[0]
+    assert isinstance(name, StringExpression), "Counter name must be a string"
+
+    # Raising sends the branch forward, which could kill the bot.
+    return ctx.vm._counters.get(name.string, 0)
 
 
 @stat(EvalKind.potioncount)

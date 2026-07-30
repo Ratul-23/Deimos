@@ -78,6 +78,7 @@ class EvalKind(Enum):
     any_player_list = auto()
     account_level = auto()
     duel_round = auto()
+    counter = auto()
 
 
 class WaitforKind(Enum):
@@ -150,10 +151,21 @@ class ExprKind(Enum):
 
 
 class TimerAction(Enum):
-    """Whether a timer statement starts or ends a timer."""
+    """What a timer statement does."""
 
     start = auto()
+    reset = auto()
     end = auto()
+
+
+class CounterAction(Enum):
+    """What a counter statement does."""
+
+    start = auto()
+    reset = auto()
+    end = auto()
+    add = auto()
+    subtract = auto()
 
 
 class SymbolKind(Enum):
@@ -611,6 +623,17 @@ class TimerStmt(Stmt):
         return f"TimerS {action_str} {self.timer_name}"
 
 
+class CounterStmt(Stmt):
+    """Starts, ends or moves a counter."""
+
+    def __init__(self, action: CounterAction, counter_name: str) -> None:
+        self.action: CounterAction = action
+        self.counter_name: str = counter_name
+
+    def __repr__(self) -> str:
+        return f"CounterS {self.action.name} {self.counter_name}"
+
+
 class CommandStmt(Stmt):
     """A command used as a statement."""
 
@@ -816,8 +839,14 @@ class InstructionKind(Enum):
     pop_stack = auto()
     write_stack = auto()
 
-    set_timer = auto()
+    start_timer = auto()
+    reset_timer = auto()
     end_timer = auto()
+
+    start_counter = auto()
+    reset_counter = auto()
+    end_counter = auto()
+    change_counter = auto()
 
     declare_constant = auto()
 
