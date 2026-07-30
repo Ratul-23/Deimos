@@ -363,6 +363,8 @@ def manage_gui(send_queue: queue.Queue, recv_queue: queue.Queue, theme_dict, too
 
     console_text = ConsoleTextEdit()
     console_text.setReadOnly(True)
+    # Carets only line up in fixed-width.
+    console_text.setFont(QFont("Consolas", gui_font_size if gui_font_size else 9))
     console_text.setStyleSheet(
         "QScrollBar:vertical { width: 6px; background: transparent; }"
         "QScrollBar::handle:vertical { background: rgba(255,255,255,40); border-radius: 3px; min-height: 20px; }"

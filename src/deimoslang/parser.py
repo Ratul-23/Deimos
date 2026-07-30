@@ -51,11 +51,11 @@ from .ast import (
 from .commands import EXPR_REGISTRY as EXPR_COMMAND_REGISTRY
 from .commands import REGISTRY as COMMAND_REGISTRY
 from .commands import CommandSpec, ExprSpec
-from .lexer import LineInfo, Token, TokenKind, render_tokens
+from .lexer import DeimosLangError, LineInfo, Token, TokenKind
 from .tokens import describe, describe_any
 
 
-class ParserError(Exception):
+class ParserError(DeimosLangError):
     """Tokens do not form valid syntax."""
 
 
@@ -66,24 +66,9 @@ class Parser:
         self.tokens: list[Token] = tokens
         self.pos: int = 0
 
-    def _fetch_line_tokens(self, line: int) -> list[Token]:
-        """Every token on a given source line."""
-        result: list[Token] = []
-
-        for tok in self.tokens:
-            if tok.line_info.line == line:
-                result.append(tok)
-
-        return result
-
     def err_manual(self, line_info: LineInfo, msg: str) -> NoReturn:
         """Raise a ParserError at a location."""
-        line_toks: list[Token] = self._fetch_line_tokens(line_info.line)
-        err_msg: str = msg
-        err_msg += f"\n{render_tokens(line_toks)}"
-        arrow_indent: str = " " * (line_info.column - 1)
-        err_msg += f"\n{arrow_indent}^"
-        raise ParserError(f"{err_msg}\nLine: {line_info.line}")
+        raise ParserError(f"{msg}\n{line_info.render()}")
 
     def err(self, token: Token, msg: str) -> NoReturn:
         """Raise a ParserError at a token."""
@@ -972,6 +957,7 @@ class Parser:
     def _parse_simple_command(self) -> Command:
         """Parse one command via its registry spec."""
         result: Command = Command()
+        result.line_info = self.tokens[self.pos].line_info
         result.player_selector = self.parse_player_selector()
 
         spec: CommandSpec | None = COMMAND_REGISTRY.get(self.tokens[self.pos].kind)
@@ -1019,6 +1005,17 @@ class Parser:
         return IdentExpression(result.literal)
 
     def parse_stmt(self) -> Stmt:
+        """Parse one statement, line stamped."""
+        line_info: LineInfo = self.tokens[self.pos].line_info
+        result: Stmt = self._parse_stmt_inner()
+
+        # An arm that stamped its own knows better.
+        if result.line_info is None:
+            result.line_info = line_info
+
+        return result
+
+    def _parse_stmt_inner(self) -> Stmt:
         """Parse one statement."""
         match self.tokens[self.pos].kind:
             case TokenKind.keyword_con:
@@ -1098,10 +1095,14 @@ class Parser:
 
                     # Each elif becomes the else branch of the one before it, nesting the chain.
                     elif self.tokens[self.pos].kind == TokenKind.keyword_elif:
+                        elif_line_info: LineInfo = self.tokens[self.pos].line_info
                         self.pos += 1
                         elif_expr: Expression = self.parse_condition()
                         elif_body: StmtList = self.parse_block()
                         elif_stmt: IfStmt = IfStmt(elif_expr, elif_body, StmtList([]))
+
+                        # Never goes through `parse_stmt`, so stamp it here.
+                        elif_stmt.line_info = elif_line_info
 
                         if len(elif_body_stack) > 0:
                             elif_body_stack[-1].branch_false = StmtList([elif_stmt])
