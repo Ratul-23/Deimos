@@ -18,6 +18,7 @@ from .ast import (
     Eval,
     EvalKind,
     Expression,
+    GreaterEqualExpression,
     GreaterExpression,
     IdentExpression,
     IfStmt,
@@ -149,10 +150,10 @@ class Parser:
 
                 try:
                     min_val, max_val = map(float, range_str.split("-"))
-                    min_expr: Expression = self.gen_greater_expression(
+                    min_expr: Expression = self.gen_greater_equal_expression(
                         evaluated, NumberExpression(min_val), player_selector
                     )
-                    max_expr: Expression = self.gen_greater_expression(
+                    max_expr: Expression = self.gen_greater_equal_expression(
                         NumberExpression(max_val), evaluated, player_selector
                     )
                     return AndExpression([min_expr, max_expr])
@@ -205,10 +206,10 @@ class Parser:
 
                         try:
                             min_val, max_val = map(float, range_str.split("-"))
-                            min_expr: Expression = self.gen_greater_expression(
+                            min_expr: Expression = self.gen_greater_equal_expression(
                                 indexed_eval, NumberExpression(min_val), player_selector
                             )
-                            max_expr: Expression = self.gen_greater_expression(
+                            max_expr: Expression = self.gen_greater_equal_expression(
                                 NumberExpression(max_val), indexed_eval, player_selector
                             )
                             expressions.append(AndExpression([min_expr, max_expr]))
@@ -251,8 +252,12 @@ class Parser:
             ConstantReferenceExpression(literal[1:]) if literal.startswith("$") else IdentExpression(literal)
         )
 
-        min_expr: Expression = self.gen_greater_expression(evaluated, RangeMinExpression(range_expr), player_selector)
-        max_expr: Expression = self.gen_greater_expression(RangeMaxExpression(range_expr), evaluated, player_selector)
+        min_expr: Expression = self.gen_greater_equal_expression(
+            evaluated, RangeMinExpression(range_expr), player_selector
+        )
+        max_expr: Expression = self.gen_greater_equal_expression(
+            RangeMaxExpression(range_expr), evaluated, player_selector
+        )
 
         return AndExpression([min_expr, max_expr])
 
@@ -323,6 +328,12 @@ class Parser:
     ) -> Expression:
         """A greater-than test, scoped."""
         return SelectorGroup(player_selector, GreaterExpression(left, right))
+
+    def gen_greater_equal_expression(
+        self, left: Expression, right: Expression, player_selector: PlayerSelector
+    ) -> Expression:
+        """A greater-or-equal test, scoped."""
+        return SelectorGroup(player_selector, GreaterEqualExpression(left, right))
 
     def gen_equivalent_expression(
         self, left: Expression, right: Expression, player_selector: PlayerSelector
@@ -521,8 +532,8 @@ class Parser:
 
         evaluated: Expression = self.get_stat_eval_expression(token_kind, is_percent)
 
-        min_expr: Expression = self.gen_greater_expression(evaluated, min_value, player_selector)
-        max_expr: Expression = self.gen_greater_expression(max_value, evaluated, player_selector)
+        min_expr: Expression = self.gen_greater_equal_expression(evaluated, min_value, player_selector)
+        max_expr: Expression = self.gen_greater_equal_expression(max_value, evaluated, player_selector)
 
         return AndExpression([min_expr, max_expr])
 
