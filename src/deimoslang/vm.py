@@ -179,6 +179,9 @@ class VM:
 
         self._until_infos: list[UntilInfo] = []
 
+        # Set while an until is only polling.
+        self._polling_untils: bool = False
+
     def reset(self) -> None:
         """Clear every bit of running state."""
         self.program = []
@@ -188,6 +191,7 @@ class VM:
         self._scheduler.add_task(Task())
         self.current_task = self._scheduler.get_current_task()
         self._until_infos = []
+        self._polling_untils = False
         self._timers = {}
         self._counters = {}
         self._any_player_client = []
@@ -361,7 +365,7 @@ class VM:
 
         return goal_txt.lower().strip()
 
-    async def _check_drops(self, client: SprintyClient, item_names: str | list[str]) -> bool:
+    async def _check_drops(self, client: SprintyClient, item_names: str | list[str], consume: bool = True) -> bool:
         """Whether a named item dropped."""
         chat_text: str = await get_chat(client)
         if not chat_text:
@@ -374,7 +378,10 @@ class VM:
 
         # Only lines since the last look. One drop would keep answering true.
         new_chat_content: str = find_new_stuff(client._last_chat_state, "\n".join(drops))
-        client._last_chat_state = "\n".join(drops)
+
+        # A poll only looks. It leaves the drop for the next ask.
+        if consume:
+            client._last_chat_state = "\n".join(drops)
 
         if not new_chat_content:
             return False
@@ -473,6 +480,7 @@ class VM:
                 clients=clients,
                 selector=selector,
                 expression=expression,
+                polling=self._polling_untils,
             )
         )
 
@@ -807,20 +815,31 @@ class VM:
 
     async def _process_untils(self) -> None:
         """Jump out if an `until` holds."""
-        # Innermost regions are checked first, so the tightest until is the one that wins.
-        for index in range(len(self._until_infos) - 1, -1, -1):
-            info: UntilInfo = self._until_infos[index]
+        # Polling must not rewrite what sameany and anyplayer read.
+        watching: list[SprintyClient] = self._any_player_client
+        self._polling_untils = True
 
-            try:
-                if await self.eval(info.expr):
+        try:
+            # Innermost regions first. The tightest until wins.
+            for index in range(len(self._until_infos) - 1, -1, -1):
+                info: UntilInfo = self._until_infos[index]
+
+                try:
+                    # An until that ends hands its own clients on.
+                    if await self.eval(info.expr):
+                        self.current_task.ip = info.exit_point
+                        return
+
+                except VMError as error:
+                    error.locate(info.line_info)
+                    logger.warning(f"Leaving an until region because its condition could not be read: {error.brief()}")
                     self.current_task.ip = info.exit_point
-                    return
+                    break
 
-            except VMError as error:
-                error.locate(info.line_info)
-                logger.warning(f"Leaving an until region because its condition could not be read: {error.brief()}")
-                self.current_task.ip = info.exit_point
-                return
+        finally:
+            self._polling_untils = False
+
+        self._any_player_client = watching
 
     async def step(self) -> None:
         """Execute one instruction."""
