@@ -189,6 +189,7 @@ class PlayerSelector:
         self.inverted: bool = False
         self.any_player: bool = False
         self.same_any: bool = False
+        self.negated: bool = False
 
     def validate(self) -> None:
         """Check the selector, then sort it."""
@@ -213,7 +214,7 @@ class PlayerSelector:
     def __repr__(self) -> str:
         return (
             f"PlayerSelector(nums: {self.player_nums}, mass: {self.mass}, inverted: {self.inverted}, "
-            f"any_player: {self.any_player}, same_any: {self.same_any})"
+            f"any_player: {self.any_player}, same_any: {self.same_any}, negated: {self.negated})"
         )
 
 
