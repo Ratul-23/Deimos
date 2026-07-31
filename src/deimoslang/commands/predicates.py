@@ -37,6 +37,16 @@ class EvalContext:
     selector: PlayerSelector
     expression: CommandExpression
 
+    # Polling only looks. A check that consumes holds off.
+    polling: bool = False
+
+    def remember(self, kind: str, client: SprintyClient, value: str | None) -> None:
+        """Record what a client shows now."""
+        if self.polling:
+            return
+
+        self.vm.logged_data[kind][client.title] = value
+
 
 type Predicate = Callable[[EvalContext], Awaitable[bool]]
 
@@ -116,16 +126,16 @@ async def zone_changed(ctx: EvalContext) -> bool:
             if expected_zone is not None:
                 if current_zone.lower() == expected_zone.lower():
                     ctx.vm._any_player_client.append(client)
-                    ctx.vm.logged_data["zone"][client.title] = current_zone.lower()
+                    ctx.remember("zone", client, current_zone.lower())
                     found_any = True
 
             else:
                 if last_zone is None:
-                    ctx.vm.logged_data["zone"][client.title] = current_zone.lower()
+                    ctx.remember("zone", client, current_zone.lower())
 
                 elif current_zone.lower() != last_zone.lower():
                     ctx.vm._any_player_client.append(client)
-                    ctx.vm.logged_data["zone"][client.title] = current_zone.lower()
+                    ctx.remember("zone", client, current_zone.lower())
                     found_any = True
 
         return found_any
@@ -150,18 +160,18 @@ async def zone_changed(ctx: EvalContext) -> bool:
                     all_valid = False
                     break
 
-                ctx.vm.logged_data["zone"][client.title] = current_zone.lower()
+                ctx.remember("zone", client, current_zone.lower())
 
             else:
                 if last_zone is None:
-                    ctx.vm.logged_data["zone"][client.title] = current_zone.lower()
+                    ctx.remember("zone", client, current_zone.lower())
                     all_valid = False
 
                 elif current_zone.lower() == last_zone.lower():
                     all_valid = False
 
                 else:
-                    ctx.vm.logged_data["zone"][client.title] = current_zone.lower()
+                    ctx.remember("zone", client, current_zone.lower())
 
         return all_valid
 
@@ -191,16 +201,16 @@ async def goal_changed(ctx: EvalContext) -> bool:
             if expected_goal is not None:
                 if current_goal == expected_goal:
                     ctx.vm._any_player_client.append(client)
-                    ctx.vm.logged_data["goal"][client.title] = current_goal
+                    ctx.remember("goal", client, current_goal)
                     found_any = True
 
             else:
                 if last_goal is None:
-                    ctx.vm.logged_data["goal"][client.title] = current_goal
+                    ctx.remember("goal", client, current_goal)
 
                 elif current_goal != last_goal:
                     ctx.vm._any_player_client.append(client)
-                    ctx.vm.logged_data["goal"][client.title] = current_goal
+                    ctx.remember("goal", client, current_goal)
                     found_any = True
 
         return found_any
@@ -217,18 +227,18 @@ async def goal_changed(ctx: EvalContext) -> bool:
                     all_valid = False
                     break
 
-                ctx.vm.logged_data["goal"][client.title] = current_goal
+                ctx.remember("goal", client, current_goal)
 
             else:
                 if last_goal is None:
-                    ctx.vm.logged_data["goal"][client.title] = current_goal
+                    ctx.remember("goal", client, current_goal)
                     all_valid = False
 
                 elif current_goal == last_goal:
                     all_valid = False
 
                 else:
-                    ctx.vm.logged_data["goal"][client.title] = current_goal
+                    ctx.remember("goal", client, current_goal)
 
         return all_valid
 
@@ -255,7 +265,7 @@ async def quest_changed(ctx: EvalContext) -> bool:
 
                 if current_quest == expected_quest and (last_quest is None or current_quest != last_quest):
                     ctx.vm._any_player_client.append(client)
-                    ctx.vm.logged_data["quest"][client.title] = current_quest
+                    ctx.remember("quest", client, current_quest)
                     found_any = True
 
             return found_any
@@ -271,7 +281,7 @@ async def quest_changed(ctx: EvalContext) -> bool:
                     all_match = False
                     break
 
-                ctx.vm.logged_data["quest"][client.title] = current_quest
+                ctx.remember("quest", client, current_quest)
 
             return all_match
 
@@ -285,11 +295,11 @@ async def quest_changed(ctx: EvalContext) -> bool:
                 last_quest: str | None = ctx.vm.logged_data["quest"].get(client.title, None)
 
                 if last_quest is None:
-                    ctx.vm.logged_data["quest"][client.title] = current_quest
+                    ctx.remember("quest", client, current_quest)
 
                 elif current_quest != last_quest:
                     ctx.vm._any_player_client.append(client)
-                    ctx.vm.logged_data["quest"][client.title] = current_quest
+                    ctx.remember("quest", client, current_quest)
                     found_any = True
 
             return found_any
@@ -302,14 +312,14 @@ async def quest_changed(ctx: EvalContext) -> bool:
                 last_quest: str | None = ctx.vm.logged_data["quest"].get(client.title, None)
 
                 if last_quest is None:
-                    ctx.vm.logged_data["quest"][client.title] = current_quest
+                    ctx.remember("quest", client, current_quest)
                     all_changed = False
 
                 elif current_quest == last_quest:
                     all_changed = False
 
                 else:
-                    ctx.vm.logged_data["quest"][client.title] = current_quest
+                    ctx.remember("quest", client, current_quest)
 
             return all_changed
 
@@ -327,7 +337,7 @@ async def items_dropped(ctx: EvalContext) -> bool:
         found_any: bool = False
 
         for client in ctx.vm._clients:
-            if await ctx.vm._check_drops(client, item_names):
+            if await ctx.vm._check_drops(client, item_names, consume=not ctx.polling):
                 ctx.vm._any_player_client.append(client)
                 found_any = True
 
@@ -335,7 +345,7 @@ async def items_dropped(ctx: EvalContext) -> bool:
 
     else:
         for client in ctx.clients:
-            if not await ctx.vm._check_drops(client, item_names):
+            if not await ctx.vm._check_drops(client, item_names, consume=not ctx.polling):
                 return False
 
         return True
