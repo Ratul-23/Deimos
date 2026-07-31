@@ -150,6 +150,12 @@ class ExprKind(Enum):
     items_dropped = auto()
 
 
+# One client alone cannot answer these.
+CROSS_CLIENT_CHECKS: frozenset[ExprKind] = frozenset(
+    {ExprKind.same_zone, ExprKind.same_quest, ExprKind.same_xyz, ExprKind.same_yaw, ExprKind.same_place}
+)
+
+
 class TimerAction(Enum):
     """What a timer statement does."""
 

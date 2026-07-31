@@ -55,6 +55,11 @@ type Predicate = Callable[[EvalContext], Awaitable[bool]]
 PREDICATES: dict[ExprKind, Predicate] = {}
 
 
+def _too_few_to_compare(ctx: EvalContext) -> bool:
+    """Whether there is nothing to compare."""
+    return len(ctx.clients) < 2
+
+
 def _same_text(left: str | None, right: str | None) -> bool:
     """Whether two names match, ignoring case."""
     if left is None or right is None:
@@ -474,8 +479,8 @@ async def in_range(ctx: EvalContext) -> bool:
 @predicate(ExprKind.same_place)
 async def same_place(ctx: EvalContext) -> bool:
     """Whether all clients stand together."""
-    if len(ctx.clients) < 2:
-        return True
+    if _too_few_to_compare(ctx):
+        return False
 
     # Clients see each other as entities only when together. Count the sightings.
     own_ids: set[int] = {await client.client_object.global_id_full() for client in ctx.clients}
@@ -529,8 +534,8 @@ async def in_zone(ctx: EvalContext) -> bool:
 @predicate(ExprKind.same_zone)
 async def same_zone(ctx: EvalContext) -> bool:
     """Whether all clients share a zone."""
-    if len(ctx.clients) == 0:
-        return True
+    if _too_few_to_compare(ctx):
+        return False
 
     expected_zone: str | None = await ctx.clients[0].zone_name()
 
@@ -544,8 +549,8 @@ async def same_zone(ctx: EvalContext) -> bool:
 @predicate(ExprKind.same_quest)
 async def same_quest(ctx: EvalContext) -> bool:
     """Whether all clients track one quest."""
-    if len(ctx.clients) == 0:
-        return True
+    if _too_few_to_compare(ctx):
+        return False
 
     expected_quest_text: str = await ctx.vm._fetch_tracked_quest_text(ctx.clients[0])
 
@@ -560,8 +565,8 @@ async def same_quest(ctx: EvalContext) -> bool:
 @predicate(ExprKind.same_yaw)
 async def same_yaw(ctx: EvalContext) -> bool:
     """Whether all clients face one way."""
-    if len(ctx.clients) == 0:
-        return True
+    if _too_few_to_compare(ctx):
+        return False
 
     # Yaw reads finer than a wizard can be aimed. Compare rounded.
     expected_yaw: float = await ctx.clients[0].body.yaw()
@@ -580,8 +585,8 @@ async def same_yaw(ctx: EvalContext) -> bool:
 @predicate(ExprKind.same_xyz)
 async def same_xyz(ctx: EvalContext) -> bool:
     """Whether all clients share a position."""
-    if len(ctx.clients) == 0:
-        return True
+    if _too_few_to_compare(ctx):
+        return False
 
     expected_pos: XYZ = await ctx.clients[0].body.position()
 

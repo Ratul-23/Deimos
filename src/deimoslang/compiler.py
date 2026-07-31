@@ -4,6 +4,7 @@ import copy
 from typing import Any
 
 from .ast import (
+    CROSS_CLIENT_CHECKS,
     AndExpression,
     BinaryExpression,
     BlockDefStmt,
@@ -37,6 +38,7 @@ from .ast import (
     NumberExpression,
     OrExpression,
     ParallelCommandStmt,
+    PlayerSelector,
     RangeMaxExpression,
     RangeMinExpression,
     ReadVarExpr,
@@ -858,6 +860,41 @@ class Compiler:
 
         self.emit(InstructionKind.ret)
 
+    def check_cross_client_selector(self, expr: CommandExpression) -> None:
+        """Refuse a group check on one client."""
+        selector: PlayerSelector | None = expr.command.player_selector
+
+        if selector is None or not expr.command.data:
+            return
+
+        kind: Any = expr.command.data[0]
+
+        if kind not in CROSS_CLIENT_CHECKS:
+            return
+
+        spelling: str = kind.name.replace("_", "")
+        reason: str = f"{spelling} compares clients against each other, so "
+
+        if selector.negated:
+            raise CompilerError(
+                f"{reason}a selector cannot negate it one client at a time. Write `not mass {spelling}` instead"
+            )
+
+        # One client always matches itself.
+        if selector.any_player:
+            raise CompilerError(f"{reason}anyplayer cannot answer it. Write `mass {spelling}` instead")
+
+        # Whoever the last `any` matched may be one client, or none.
+        if selector.same_any:
+            raise CompilerError(f"{reason}sameany cannot answer it. Write `mass {spelling}` instead")
+
+        # `except p1` leaves the others, so still a group.
+        if len(selector.player_nums) == 1 and not selector.inverted:
+            raise CompilerError(
+                f"{reason}one client cannot answer it. Name a second client like `p1:p2`, "
+                f"or write `mass {spelling}` instead"
+            )
+
     def prep_expression(self, expr: Expression) -> None:
         """Rewrite an expression for the VM."""
         match expr:
@@ -908,13 +945,15 @@ class Compiler:
                 self.prep_expression(expr.expr)
                 self.prep_expression(expr.index)
 
+            case CommandExpression():
+                self.check_cross_client_selector(expr)
+
             case (
                 ConstantExpression()
                 | ConstantReferenceExpression()
                 | NumberExpression()
                 | StringExpression()
                 | KeyExpression()
-                | CommandExpression()
                 | XYZExpression()
                 | IdentExpression()
                 | StackLocExpression()
