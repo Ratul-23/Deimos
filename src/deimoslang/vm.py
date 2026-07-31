@@ -474,6 +474,9 @@ class VM:
         if check is None:
             raise VMError(f"Unimplemented expression: {expression}")
 
+        if selector.negated:
+            return await self._eval_negated_check(check, selector, expression)
+
         return await check(
             EvalContext(
                 vm=self,
@@ -483,6 +486,28 @@ class VM:
                 polling=self._polling_untils,
             )
         )
+
+    async def _eval_negated_check(
+        self, check: Predicate, selector: PlayerSelector, expression: CommandExpression
+    ) -> bool:
+        """Ask a check per client."""
+        asked: list[SprintyClient] = self._clients if selector.any_player else self._select_players(selector)
+        alone: PlayerSelector = PlayerSelector()
+        failed: list[SprintyClient] = []
+
+        for client in asked:
+            asking: EvalContext = EvalContext(
+                vm=self, clients=[client], selector=alone, expression=expression, polling=self._polling_untils
+            )
+
+            if not await check(asking):
+                failed.append(client)
+
+        if selector.any_player:
+            self._any_player_client = failed
+            return len(failed) > 0
+
+        return len(asked) > 0 and len(failed) == len(asked)
 
     async def eval(self, expression: Expression, client: Client | None = None) -> Any:
         """Evaluate an expression, maybe per client."""
@@ -669,15 +694,21 @@ class VM:
 
                     for anyplayer in self._clients:
                         result = await self.eval(expr, anyplayer)
-                        if result:
+
+                        # Negated counts the failures instead.
+                        if bool(result) != expression.players.negated:
                             self._any_player_client.append(anyplayer)
                             found_any = True
 
                     return found_any
 
                 else:
+                    # Nobody running, so nobody to answer either way.
+                    if not players:
+                        return False
+
                     for player in players:
-                        if not await self.eval(expr, player):
+                        if bool(await self.eval(expr, player)) == expression.players.negated:
                             return False
 
                     return True

@@ -616,12 +616,19 @@ class Parser:
         """Parse a command as a condition."""
         player_selector: PlayerSelector = self.parse_player_selector()
 
+        # Asks each client the opposite, unlike a leading `not`.
+        negation: Token | None = self.consume_optional(TokenKind.keyword_not)
+        player_selector.negated = negation is not None
+
         # An identifier followed by = tests a constant's value rather than naming a command.
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.identifier:
             ident: str = self.tokens[self.pos].literal
             self.pos += 1
 
             if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.equals:
+                if negation is not None:
+                    self.err(negation, f"Write `not {ident} = ...` instead, since a constant has no client to ask")
+
                 self.pos += 1
 
                 if self.pos < len(self.tokens):
@@ -650,6 +657,10 @@ class Parser:
 
         if spec is not None:
             return spec.parse(self, player_selector, spec.token)
+
+        # Only a check reads the selector.
+        if negation is not None:
+            self.err(negation, "`not` here needs a check after it, or write it before the selector")
 
         return self.parse_unary_expression()
 
