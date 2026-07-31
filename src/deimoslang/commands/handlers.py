@@ -609,7 +609,7 @@ async def instr_log_single(ctx: InstructionContext) -> None:
 async def instr_log_multi(ctx: InstructionContext) -> None:
     """Log a value per client."""
     assert isinstance(ctx.instruction.data, list)
-    clients: list[SprintyClient] = ctx.vm._select_players(ctx.instruction.data[0])
+    clients: list[SprintyClient] = ctx.vm._command_players(ctx.instruction.data[0])
     expr: Expression = ctx.instruction.data[1]
 
     for client in clients:
@@ -660,15 +660,7 @@ async def instr_set_yaw(ctx: InstructionContext) -> None:
     # A heading may be written as a number, a constant or an expression, so resolve it before writing memory.
     yaw: float = _as_number(await ctx.vm._extract_data_info(ctx.instruction.data[1]))
 
-    if selector.any_player and ctx.vm._any_player_client:
-        clients: list[SprintyClient] = ctx.vm._any_player_client
-
-    # No client matched the last anyplayer check, so the first one stands in.
-    elif selector.any_player:
-        clients: list[SprintyClient] = ctx.vm._clients[:1]
-
-    else:
-        clients: list[SprintyClient] = ctx.vm._select_players(selector)
+    clients: list[SprintyClient] = ctx.vm._command_players(selector)
 
     if clients:
         async with asyncio.TaskGroup() as tg:
@@ -690,7 +682,7 @@ async def instr_setdeck(ctx: InstructionContext) -> None:
             await deck_builder.set_deck_preset(deck)
 
     assert isinstance(ctx.instruction.data, list)
-    clients: list[SprintyClient] = ctx.vm._select_players(ctx.instruction.data[0])
+    clients: list[SprintyClient] = ctx.vm._command_players(ctx.instruction.data[0])
     token: str = ctx.instruction.data[1]
     coder: DeckEncoderDecoder = DeckEncoderDecoder(token=token)
     deck: dict = coder.decode()
@@ -716,7 +708,7 @@ async def instr_getdeck(ctx: InstructionContext) -> None:
             logger.debug(f"{client.title}: --> {token} <--")
 
     assert isinstance(ctx.instruction.data, list)
-    clients: list[SprintyClient] = ctx.vm._select_players(ctx.instruction.data[0])
+    clients: list[SprintyClient] = ctx.vm._command_players(ctx.instruction.data[0])
     logger.debug("Reading deck...")
 
     async with asyncio.TaskGroup() as tg:
