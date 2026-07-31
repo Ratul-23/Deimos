@@ -1019,9 +1019,5 @@ async def read_max_potioncount(ctx: StatContext) -> StatValue:
 
 @stat(EvalKind.any_player_list)
 async def read_any_player_list(ctx: StatContext) -> StatValue:
-    """Titles of the clients that satisfied the last `any` condition."""
-    if ctx.vm._any_player_client:
-        return [client.title for client in ctx.vm._any_player_client]
-
-    # Nothing matched, so the first client stands in, the same way commands treat it.
-    return [client.title for client in ctx.vm._clients[:1]]
+    """Titles that satisfied the last `any`."""
+    return [client.title for client in ctx.vm._any_player_client]

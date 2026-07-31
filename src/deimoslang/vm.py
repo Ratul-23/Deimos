@@ -300,6 +300,13 @@ class VM:
 
             return result
 
+    def _command_players(self, selector: PlayerSelector) -> list[SprintyClient]:
+        """The clients a command runs on."""
+        if selector.any_player:
+            return self._any_player_client
+
+        return self._select_players(selector)
+
     async def _fetch_tracked_quest(self, client: SprintyClient) -> QuestData:
         """The quest the client is tracking."""
         tracked_id: int = await client.quest_id()
@@ -745,15 +752,7 @@ class VM:
         assert isinstance(instruction.data, list)
         selector: PlayerSelector = instruction.data[0]
 
-        if selector.any_player and self._any_player_client:
-            clients: list[SprintyClient] = self._any_player_client
-
-        # No client matched the last anyplayer check, so the first one stands in.
-        elif selector.any_player:
-            clients: list[SprintyClient] = self._clients[:1]
-
-        else:
-            clients: list[SprintyClient] = self._select_players(selector)
+        clients: list[SprintyClient] = self._command_players(selector)
 
         if not clients:
             return
