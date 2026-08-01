@@ -13,7 +13,6 @@ class TokenKind(Enum):
     contains = auto()
     percent = auto()
     path = auto()
-    logical_and = auto()
     logical_to = auto()
     logical_on = auto()
     logical_off = auto()
@@ -403,7 +402,6 @@ _KIND_NAMES: dict[TokenKind, str] = {
     TokenKind.number: "a number",
     TokenKind.percent: "a percentage",
     TokenKind.path: "a path such as wizardcity/unicornway",
-    TokenKind.logical_and: "`&&`",
     TokenKind.greater: "`>`",
     TokenKind.less: "`<`",
     TokenKind.equals: "`=`",

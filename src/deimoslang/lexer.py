@@ -173,11 +173,7 @@ class Tokenizer:
             else:
                 match char:
                     case "&":
-                        if pos + 1 < len(line) and line[pos + 1] == "&":
-                            put_simple(TokenKind.logical_and, "&&")
-                            pos += 2
-                        else:
-                            err("Expected && but found a single &", pos)
+                        err("Unexpected &", pos)
 
                     case ":":
                         put_simple(TokenKind.colon, char)

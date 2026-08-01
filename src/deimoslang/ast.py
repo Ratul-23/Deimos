@@ -236,9 +236,6 @@ class Command:
         self.data: list[Any] = []
         self.player_selector: PlayerSelector | None = None
 
-        # Own line, so && halves point at themselves.
-        self.line_info: LineInfo | None = None
-
     def __repr__(self) -> str:
         params_str: str = ", ".join([str(item) for item in self.data])
 
@@ -658,17 +655,6 @@ class ConstantDeclStmt(Stmt):
         return f"ConstDeclS({self.name}, {self.value})"
 
 
-# The compiler lowers these one after another, so the name states an intent, not a guarantee.
-class ParallelCommandStmt(Stmt):
-    """Commands joined with `&&`."""
-
-    def __init__(self, commands: list[Command]) -> None:
-        self.commands: list[Command] = commands
-
-    def __repr__(self) -> str:
-        return f"ParallelCommandStmt({self.commands})"
-
-
 class StmtList(Stmt):
     """Statements run in order."""
 
@@ -705,8 +691,8 @@ class CounterStmt(Stmt):
 class CommandStmt(Stmt):
     """A command used as a statement."""
 
-    def __init__(self, command: Command | ParallelCommandStmt) -> None:
-        self.command: Command | ParallelCommandStmt = command
+    def __init__(self, command: Command) -> None:
+        self.command: Command = command
 
     def __repr__(self) -> str:
         return f"ComS({self.command})"
