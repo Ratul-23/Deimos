@@ -37,7 +37,6 @@ from .ast import (
     MultiplyExpression,
     NumberExpression,
     OrExpression,
-    ParallelCommandStmt,
     PlayerSelector,
     RangeMaxExpression,
     RangeMinExpression,
@@ -929,9 +928,6 @@ class Parser:
 
     def parse_expression(self) -> Expression:
         """Parse a full expression."""
-        if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.logical_and:
-            self.err(self.tokens[self.pos], "Expected an expression before &&")
-
         return self.parse_logical_expression()
 
     def parse_player_selector(self) -> PlayerSelector:
@@ -1155,10 +1151,6 @@ class Parser:
 
     def end_line(self) -> None:
         """Require the end of the line."""
-        # && carries on to another command, so the statement has not ended yet.
-        if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.logical_and:
-            return
-
         self.expect_consume(TokenKind.END_LINE)
 
     def end_line_optional(self) -> None:
@@ -1166,24 +1158,9 @@ class Parser:
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.END_LINE:
             self.pos += 1
 
-    def parse_command(self) -> Command | ParallelCommandStmt:
-        """Parse one command, or several joined with `&&`."""
-        commands: list[Command] = []
-        commands.append(self._parse_simple_command())
-
-        while self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.logical_and:
-            self.pos += 1
-            commands.append(self._parse_simple_command())
-
-        if len(commands) == 1:
-            return commands[0]
-
-        return ParallelCommandStmt(commands)
-
-    def _parse_simple_command(self) -> Command:
+    def parse_command(self) -> Command:
         """Parse one command via its registry spec."""
         result: Command = Command()
-        result.line_info = self.tokens[self.pos].line_info
         result.player_selector = self.parse_player_selector()
 
         spec: CommandSpec | None = COMMAND_REGISTRY.get(self.tokens[self.pos].kind)

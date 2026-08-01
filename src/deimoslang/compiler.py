@@ -37,7 +37,6 @@ from .ast import (
     MixinStmt,
     NumberExpression,
     OrExpression,
-    ParallelCommandStmt,
     PlayerSelector,
     RangeMaxExpression,
     RangeMinExpression,
@@ -618,19 +617,8 @@ class Compiler:
         """Emit a command for the VM."""
         self.emit(InstructionKind.deimos_call, [com.player_selector, com.kind.name, com.data])
 
-    def compile_command(self, com: Command | ParallelCommandStmt) -> None:
-        """Emit code for one command, or each of a parallel group."""
-        # Commands joined by && are laid down one after another, so they run in order.
-        if isinstance(com, ParallelCommandStmt):
-            for cmd in com.commands:
-                self.compile_command(cmd)
-
-            return
-
-        # `_compile` restores it, so this cannot leak.
-        if com.line_info is not None:
-            self._current_line = com.line_info
-
+    def compile_command(self, com: Command) -> None:
+        """Emit code for one command."""
         match com.kind:
             case CommandKind.restart_bot:
                 self.emit(InstructionKind.restart_bot)
