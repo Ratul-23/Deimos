@@ -3,11 +3,13 @@
 from typing import NoReturn
 
 from .ast import (
+    CROSS_CLIENT_CHECKS,
     AndExpression,
     BlockDefStmt,
     BreakStmt,
     CallStmt,
     Command,
+    CommandExpression,
     CommandStmt,
     ConstantCheckExpression,
     ConstantDeclStmt,
@@ -49,7 +51,9 @@ from .ast import (
     UntilStmt,
     WhileStmt,
     XYZExpression,
+    asks_any_player,
     describe_expression,
+    operand_selector,
 )
 from .commands import EXPR_REGISTRY as EXPR_COMMAND_REGISTRY
 from .commands import REGISTRY as COMMAND_REGISTRY
@@ -60,6 +64,42 @@ from .tokens import describe, describe_any
 
 class ParserError(DeimosLangError):
     """Tokens do not form valid syntax."""
+
+
+def _joined_parts(expr: Expression, joiner: type[AndExpression] | type[OrExpression]) -> list[Expression]:
+    """An `and` or `or`'s operands, flattened."""
+    if not isinstance(expr, joiner):
+        return [expr]
+
+    return [part for operand in expr.expressions for part in _joined_parts(operand, joiner)]
+
+
+def _narrow_to_any(expr: Expression) -> Expression:
+    """Aim a bare operand at `any`."""
+    # isbetween and joined conditions hold several operands, so narrow each.
+    if isinstance(expr, AndExpression | OrExpression):
+        expr.expressions = [_narrow_to_any(part) for part in expr.expressions]
+        return expr
+
+    # Same client, so the `not` moves onto the check.
+    if isinstance(expr, UnaryExpression) and expr.operator == UnaryOp.not_:
+        negated, inner = True, expr.expr
+    else:
+        negated, inner = False, expr
+
+    # Cross-client checks never mean one client.
+    if isinstance(inner, CommandExpression) and inner.command.data and inner.command.data[0] in CROSS_CLIENT_CHECKS:
+        return expr
+
+    selector: PlayerSelector | None = operand_selector(inner)
+
+    if selector is None or not selector.implicit:
+        return expr
+
+    selector.mass = False
+    selector.any_player = True
+    selector.negated = negated
+    return inner
 
 
 # All parse the same, only the action differs.
@@ -727,22 +767,42 @@ class Parser:
     def parse_and_expression(self) -> Expression:
         """Parse conditions joined by `and`."""
         expr: Expression = self.parse_negation_expression()
+        after_any: bool = asks_any_player(expr)
+
+        # Flat list, so no operand hides from narrowing.
+        parts: list[Expression] = _joined_parts(expr, AndExpression)
 
         while self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.keyword_and:
             self.pos += 1
-            expr = AndExpression([expr, self.parse_negation_expression()])
+            right: Expression = self.parse_negation_expression()
 
-        return expr
+            # No selector after an `any` means the same clients.
+            if after_any:
+                right = _narrow_to_any(right)
+
+            after_any = after_any or asks_any_player(right)
+            parts.extend(_joined_parts(right, AndExpression))
+
+        return parts[0] if len(parts) == 1 else AndExpression(parts)
 
     def parse_logical_expression(self) -> Expression:
         """Parse conditions joined by `or`."""
         expr: Expression = self.parse_and_expression()
+        after_any: bool = asks_any_player(expr)
+        parts: list[Expression] = _joined_parts(expr, OrExpression)
 
         while self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.keyword_or:
             self.pos += 1
-            expr = OrExpression([expr, self.parse_and_expression()])
+            right: Expression = self.parse_and_expression()
 
-        return expr
+            # No selector after an `any` means the same clients.
+            if after_any:
+                right = _narrow_to_any(right)
+
+            after_any = after_any or asks_any_player(right)
+            parts.extend(_joined_parts(right, OrExpression))
+
+        return parts[0] if len(parts) == 1 else OrExpression(parts)
 
     def parse_expression(self) -> Expression:
         """Parse a full expression."""
@@ -820,8 +880,9 @@ class Parser:
             self.err(self.tokens[self.pos - 1], f"Invalid player selector: {error}")
 
         # A command written without a selector applies to every client.
-        if len(result.player_nums) == 0 and not result.any_player and not result.same_any:
+        if len(result.player_nums) == 0 and not result.mass and not result.any_player and not result.same_any:
             result.mass = True
+            result.implicit = True
 
         return result
 
