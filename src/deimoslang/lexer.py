@@ -219,6 +219,11 @@ class Tokenizer:
                             put_simple(TokenKind.star, char)
                             pos += 1
 
+                    # A percentage keeps its %. A lone one is the leftover.
+                    case "%":
+                        put_simple(TokenKind.modulo, char)
+                        pos += 1
+
                     case "/":
                         if pos + 1 < len(line) and line[pos + 1] == "/":
                             put_simple(TokenKind.slash_slash, "//")
@@ -301,6 +306,10 @@ class Tokenizer:
                             # A digit somewhere keeps names like `e` out.
                             if any(ch.isdigit() for ch in full) and all(ch.isnumeric() or ch in ".eE-%" for ch in full):
                                 if "%" in full:
+                                    # More number after the % means spaces were left out.
+                                    if not full.endswith("%"):
+                                        err(f"Put spaces around the % in {full} to take the leftover", pos)
+
                                     try:
                                         put_simple(TokenKind.percent, full, Percent(float(full[:-1]) / 100))
                                     except ValueError:
@@ -311,6 +320,17 @@ class Tokenizer:
                                         put_simple(TokenKind.number, full, float(full))
                                     except ValueError:
                                         err("Unable to convert to number", pos)
+
+                            # Only numbers and slashes spell a division, not a path.
+                            elif "/" in full and all(ch.isdigit() or ch == "." or ch == "/" for ch in full):
+                                number_text: str = full[: full.index("/")]
+
+                                try:
+                                    put_simple(TokenKind.number, number_text, float(number_text))
+                                except ValueError:
+                                    err("Unable to convert to number", pos)
+
+                                scan = pos + len(number_text)
 
                             elif "/" in full:
                                 if full.endswith("/"):

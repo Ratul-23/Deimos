@@ -4,7 +4,9 @@ from typing import NoReturn
 
 from .ast import (
     CROSS_CLIENT_CHECKS,
+    AddExpression,
     AndExpression,
+    BinaryExpression,
     BlockDefStmt,
     BreakStmt,
     CallStmt,
@@ -31,6 +33,8 @@ from .ast import (
     ListExpression,
     LoopStmt,
     MixinStmt,
+    ModuloExpression,
+    MultiplyExpression,
     NumberExpression,
     OrExpression,
     ParallelCommandStmt,
@@ -43,6 +47,7 @@ from .ast import (
     Stmt,
     StmtList,
     StringExpression,
+    SubExpression,
     TimerAction,
     TimerStmt,
     TimesStmt,
@@ -100,6 +105,17 @@ def _narrow_to_any(expr: Expression) -> Expression:
     selector.any_player = True
     selector.negated = negated
     return inner
+
+
+_MULTIPLICATIVE: dict[TokenKind, type[BinaryExpression]] = {
+    TokenKind.star: MultiplyExpression,
+    TokenKind.slash: DivideExpression,
+    TokenKind.modulo: ModuloExpression,
+}
+
+_ARITHMETIC: frozenset[TokenKind] = frozenset({*_MULTIPLICATIVE, TokenKind.plus, TokenKind.minus})
+
+_COMPARISONS: frozenset[TokenKind] = frozenset({TokenKind.greater, TokenKind.less, TokenKind.equals})
 
 
 # All parse the same, only the action differs.
@@ -178,23 +194,16 @@ class Parser:
 
     def parse_numeric_comparison(self, evaluated: Expression, player_selector: PlayerSelector) -> Expression:
         """Parse a comparison against a value."""
-        if self.pos < len(self.tokens) and self.tokens[self.pos].kind in [
-            TokenKind.greater,
-            TokenKind.less,
-            TokenKind.equals,
-        ]:
+        # A number may be worked on first, as in `counter runs % 10 == 0`.
+        worked_on: int = self.pos
+        evaluated = self.parse_additive_expression(evaluated)
+        calculated: bool = self.pos > worked_on
+
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind in _COMPARISONS:
             operator: Token = self.tokens[self.pos]
             self.pos += 1
             target: Expression = self.parse_expression()
-
-            if operator.kind == TokenKind.greater:
-                return self.gen_greater_expression(evaluated, target, player_selector)
-
-            elif operator.kind == TokenKind.less:
-                return self.gen_greater_expression(target, evaluated, player_selector)
-
-            elif operator.kind == TokenKind.equals:
-                return self.gen_equivalent_expression(evaluated, target, player_selector)
+            return self._gen_comparison(operator, evaluated, target, player_selector)
 
         elif self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.keyword_isbetween:
             self.pos += 1
@@ -221,6 +230,10 @@ class Parser:
                         self.tokens[self.pos - 1], f"Invalid range format: {range_str}. Expected format like '1-100'"
                     )
 
+        # A calculation only reads as a number. Never the condition.
+        if calculated:
+            self.err(self.tokens[worked_on], "Expected a condition, got a calculation")
+
         # Nothing to compare against. The value is the condition.
         return SelectorGroup(player_selector, evaluated)
 
@@ -239,19 +252,11 @@ class Parser:
 
                 indexed_eval: IndexAccessExpression = IndexAccessExpression(evaluated, NumberExpression(index))
 
-                if self.tokens[self.pos].kind in [TokenKind.greater, TokenKind.less, TokenKind.equals]:
+                if self.tokens[self.pos].kind in _COMPARISONS:
                     operator: Token = self.tokens[self.pos]
                     self.pos += 1
                     target: Expression = self.parse_expression()
-
-                    if operator.kind == TokenKind.greater:
-                        expressions.append(self.gen_greater_expression(indexed_eval, target, player_selector))
-
-                    elif operator.kind == TokenKind.less:
-                        expressions.append(self.gen_greater_expression(target, indexed_eval, player_selector))
-
-                    else:
-                        expressions.append(self.gen_equivalent_expression(indexed_eval, target, player_selector))
+                    expressions.append(self._gen_comparison(operator, indexed_eval, target, player_selector))
 
                 elif self.tokens[self.pos].kind == TokenKind.keyword_isbetween:
                     self.pos += 1
@@ -320,7 +325,14 @@ class Parser:
         return AndExpression([min_expr, max_expr])
 
     def parse_atom(self) -> Expression:
-        """Parse a literal, list, path, coordinate or identifier."""
+        """Parse the smallest whole value."""
+        # A group is one whole expression. An outer `and` gates an `or` inside.
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.paren_open:
+            self.pos += 1
+            grouped: Expression = self.parse_expression()
+            self.expect_consume(TokenKind.paren_close)
+            return grouped
+
         # A $name reads the constant's value, while a bare name is used as written.
         if (
             self.pos < len(self.tokens)
@@ -380,6 +392,46 @@ class Parser:
 
         else:
             return self.parse_atom()
+
+    def parse_multiplicative_expression(self, left: Expression | None = None) -> Expression:
+        """Parse `*`, `/` and `%`."""
+        expr: Expression = self.parse_unary_expression() if left is None else left
+
+        while self.pos < len(self.tokens) and self.tokens[self.pos].kind in _MULTIPLICATIVE:
+            operator: TokenKind = self.tokens[self.pos].kind
+            self.pos += 1
+            right: Expression = self.parse_unary_expression()
+            expr = _MULTIPLICATIVE[operator](expr, right)
+
+        return expr
+
+    def parse_additive_expression(self, left: Expression | None = None) -> Expression:
+        """Parse `+` and `-` between values."""
+        expr: Expression = self.parse_multiplicative_expression(left)
+
+        while self.pos < len(self.tokens) and self.tokens[self.pos].kind in [TokenKind.plus, TokenKind.minus]:
+            operator: TokenKind = self.tokens[self.pos].kind
+            self.pos += 1
+            right: Expression = self.parse_multiplicative_expression()
+            expr = AddExpression(expr, right) if operator == TokenKind.plus else SubExpression(expr, right)
+
+        return expr
+
+    def _gen_comparison(
+        self, operator: Token, left: Expression, right: Expression, player_selector: PlayerSelector
+    ) -> Expression:
+        """The test an operator stands for."""
+        return SelectorGroup(player_selector, self._comparison(operator, left, right))
+
+    def _comparison(self, operator: Token, left: Expression, right: Expression) -> Expression:
+        """The same test, asking no client."""
+        if operator.kind == TokenKind.greater:
+            return self.gen_greater_expression(left, right, player_selector)
+
+        if operator.kind == TokenKind.less:
+            return self.gen_greater_expression(right, left, player_selector)
+
+        return self.gen_equivalent_expression(left, right, player_selector)
 
     def gen_greater_expression(
         self, left: Expression, right: Expression, player_selector: PlayerSelector
@@ -473,11 +525,10 @@ class Parser:
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.keyword_isbetween:
             return self._handle_between_comparison(token_kind, player_selector)
 
-        if self.pos < len(self.tokens) and self.tokens[self.pos].kind in [
-            TokenKind.greater,
-            TokenKind.less,
-            TokenKind.equals,
-        ]:
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind in _ARITHMETIC:
+            return self._handle_calculated_comparison(token_kind, player_selector)
+
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind in _COMPARISONS:
             return self._handle_explicit_comparison(token_kind, player_selector)
 
         return self._handle_implicit_comparison(token_kind, player_selector)
@@ -566,10 +617,25 @@ class Parser:
         else:
             self.err(self.tokens[self.pos - 1], f"Unexpected {describe(token_kind)}")
 
-    def _handle_between_comparison(self, token_kind: TokenKind, player_selector: PlayerSelector) -> Expression:
-        """Parse `isbetween`, taking either two bounds or one range value."""
-        self.pos += 1
+    def _parse_comparison_target(self, accepted: list[TokenKind | str]) -> tuple[Expression, bool]:
+        """What a stat is compared against."""
+        # A group opens a calculation. A plain number, not a percentage.
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.paren_open:
+            return self.parse_additive_expression(), False
 
+        first: Expression = self.parse_value(accepted)
+        is_percent: bool = self.tokens[self.pos - 1].kind == TokenKind.percent
+
+        # A calculation may follow the first value, as in `healthabove 50 - 10`.
+        return self.parse_additive_expression(first), is_percent
+
+    def _reject_percentage(self, is_percent: bool, written_at: int) -> None:
+        """Refuse a percent in a calculation."""
+        if is_percent:
+            self.err(self.tokens[written_at], "Expected a number, got a percentage")
+
+    def _parse_between_bounds(self) -> tuple[Expression, Expression, bool]:
+        """Parse the bounds after `isbetween`."""
         bound_kinds: list[TokenKind | str] = [TokenKind.number, TokenKind.percent, TokenKind.identifier]
         first: Expression = self.parse_value(bound_kinds + [TokenKind.string])
 
@@ -588,38 +654,62 @@ class Parser:
             max_value: Expression = RangeMaxExpression(first)
             is_percent: bool = False
 
-        evaluated: Expression = self.get_stat_eval_expression(token_kind, is_percent)
+        return min_value, max_value, is_percent
 
+    def _gen_between(
+        self, evaluated: Expression, min_value: Expression, max_value: Expression, player_selector: PlayerSelector
+    ) -> Expression:
+        """The tests an `isbetween` stands for."""
         min_expr: Expression = self.gen_greater_equal_expression(evaluated, min_value, player_selector)
         max_expr: Expression = self.gen_greater_equal_expression(max_value, evaluated, player_selector)
 
         return AndExpression([min_expr, max_expr])
 
+    def _handle_between_comparison(self, token_kind: TokenKind, player_selector: PlayerSelector) -> Expression:
+        """Parse a stat against a range."""
+        self.pos += 1
+        min_value, max_value, is_percent = self._parse_between_bounds()
+        evaluated: Expression = self.get_stat_eval_expression(token_kind, is_percent)
+
+        return self._gen_between(evaluated, min_value, max_value, player_selector)
+
+    def _handle_calculated_comparison(self, token_kind: TokenKind, player_selector: PlayerSelector) -> Expression:
+        """Parse a stat with a calculation."""
+        # The stat reads as a plain number. A percent has nothing to calculate with.
+        left: Expression = self.parse_additive_expression(self.get_stat_eval_expression(token_kind, False))
+
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.keyword_isbetween:
+            self.pos += 1
+            bounds_at: int = self.pos
+            min_value, max_value, is_percent = self._parse_between_bounds()
+            self._reject_percentage(is_percent, bounds_at)
+
+            return self._gen_between(left, min_value, max_value, player_selector)
+
+        if self.pos >= len(self.tokens) or self.tokens[self.pos].kind not in _COMPARISONS:
+            self.err(self.tokens[min(self.pos, len(self.tokens) - 1)], "Expected a condition, got a calculation")
+
+        operator: Token = self.tokens[self.pos]
+        self.pos += 1
+        target_at: int = self.pos
+        target, is_percent = self._parse_comparison_target([TokenKind.number, TokenKind.percent, TokenKind.identifier])
+        self._reject_percentage(is_percent, target_at)
+
+        return self._gen_comparison(operator, left, target, player_selector)
+
     def _handle_explicit_comparison(self, token_kind: TokenKind, player_selector: PlayerSelector) -> Expression:
-        """Parse a stat compared with an explicit operator."""
+        """Parse a stat and its operator."""
         operator: Token = self.tokens[self.pos]
         self.pos += 1
 
-        target: Expression = self.parse_value([TokenKind.number, TokenKind.percent, TokenKind.identifier])
-        evaluated: Expression = self.get_stat_eval_expression(token_kind, False)
+        target, is_percent = self._parse_comparison_target([TokenKind.number, TokenKind.percent, TokenKind.identifier])
+        evaluated: Expression = self.get_stat_eval_expression(token_kind, is_percent)
 
-        if operator.kind == TokenKind.greater:
-            return self.gen_greater_expression(evaluated, target, player_selector)
-
-        elif operator.kind == TokenKind.less:
-            return self.gen_greater_expression(target, evaluated, player_selector)
-
-        else:
-            return self.gen_equivalent_expression(evaluated, target, player_selector)
+        return self._gen_comparison(operator, evaluated, target, player_selector)
 
     def _handle_implicit_comparison(self, token_kind: TokenKind, player_selector: PlayerSelector) -> Expression:
         """Parse a bare value to compare."""
-        value_expr: Expression = self.parse_value([TokenKind.number, TokenKind.percent])
-
-        if not isinstance(value_expr, NumberExpression):
-            self.err(self.tokens[self.pos - 1], f"Expected number or percent, got {value_expr}")
-
-        is_percent: bool = self.tokens[self.pos - 1].kind == TokenKind.percent
+        value_expr, is_percent = self._parse_comparison_target([TokenKind.number, TokenKind.percent])
         evaluated: Expression = self.get_stat_eval_expression(token_kind, is_percent)
 
         # With no operator written, the command spelling decides the direction.
@@ -659,6 +749,17 @@ class Parser:
         # Asks each client the opposite, unlike a leading `not`.
         negation: Token | None = self.consume_optional(TokenKind.keyword_not)
         player_selector.negated = negation is not None
+
+        # A selector or `not` out here cannot reach inside a group.
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.paren_open:
+            if negation is not None:
+                self.err(negation, "Write `not` before the group instead, since it cannot reach inside one")
+
+            if not player_selector.mass:
+                self.err(
+                    self.tokens[self.pos],
+                    "A player selector cannot cover a group. Write it on each check inside instead",
+                )
 
         # An identifier followed by = tests a constant's value rather than naming a command.
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.identifier:
@@ -702,7 +803,7 @@ class Parser:
         if negation is not None:
             self.err(negation, "`not` here needs a check after it, or write it before the selector")
 
-        return self.parse_unary_expression()
+        return self.parse_additive_expression()
 
     def _token_for(self, expr: Expression, start: int, end: int) -> Token:
         """The token that wrote a value."""
@@ -929,8 +1030,10 @@ class Parser:
                     if self.tokens[self.pos].kind == TokenKind.comma:
                         vals.append(NumberExpression(0.0))
                         self.pos += 1
+
+                    # A coordinate is only ever a number. `-` starts the next one.
                     else:
-                        vals.append(self.parse_expression())
+                        vals.append(self.parse_unary_expression())
 
                         if self.tokens[self.pos].kind == TokenKind.comma:
                             self.pos += 1
@@ -1121,7 +1224,9 @@ class Parser:
         match self.tokens[self.pos].kind:
             case TokenKind.keyword_con:
                 self.pos += 1
-                var_name: str = self.expect_consume(TokenKind.identifier).literal
+
+                # Every other name in the language may be spelled with a keyword, so a constant may too.
+                var_name: str = self.consume_any_ident().ident
                 self.expect_consume(TokenKind.equals)
                 expr: Expression = self.parse_expression()
                 self.end_line()
