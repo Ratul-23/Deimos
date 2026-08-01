@@ -79,6 +79,7 @@ class EvalKind(Enum):
     account_level = auto()
     duel_round = auto()
     counter = auto()
+    timer = auto()
 
 
 class WaitforKind(Enum):
@@ -354,6 +355,13 @@ class BinaryExpression(Expression):
         self.rhs: Expression = rhs
 
 
+class AddExpression(BinaryExpression):
+    """Addition."""
+
+    def __repr__(self) -> str:
+        return f"AddE({self.lhs}, {self.rhs})"
+
+
 class SubExpression(BinaryExpression):
     """Subtraction."""
 
@@ -361,11 +369,25 @@ class SubExpression(BinaryExpression):
         return f"SubE({self.lhs}, {self.rhs})"
 
 
+class MultiplyExpression(BinaryExpression):
+    """Multiplication."""
+
+    def __repr__(self) -> str:
+        return f"MultiplyE({self.lhs}, {self.rhs})"
+
+
 class DivideExpression(BinaryExpression):
     """Division."""
 
     def __repr__(self) -> str:
         return f"DivideE({self.lhs}, {self.rhs})"
+
+
+class ModuloExpression(BinaryExpression):
+    """Remainder after a division."""
+
+    def __repr__(self) -> str:
+        return f"ModuloE({self.lhs}, {self.rhs})"
 
 
 class EquivalentExpression(BinaryExpression):
@@ -544,8 +566,11 @@ _EXPRESSION_NAMES: dict[type[Expression], str] = {
     IdentExpression: "a name",
     KeyExpression: "a key",
     Eval: "a stat",
+    AddExpression: "a calculation",
     SubExpression: "a calculation",
+    MultiplyExpression: "a calculation",
     DivideExpression: "a calculation",
+    ModuloExpression: "a calculation",
     IndexAccessExpression: "a numbered part of a window",
     RangeMinExpression: "the low end of a range",
     RangeMaxExpression: "the high end of a range",

@@ -338,6 +338,7 @@ _LOG_VALUES: dict[TokenKind, _LogValue] = {
     ),
     TokenKind.command_expr_playercount: _LogValue(LogKind.single, "playercount", "%d", (EvalKind.playercount,)),
     TokenKind.command_expr_counter: _LogValue(LogKind.single, "counter", "%d", (EvalKind.counter,), takes_name=True),
+    TokenKind.command_expr_timer: _LogValue(LogKind.single, "timer", "%.1fs", (EvalKind.timer,), takes_name=True),
     TokenKind.command_expr_account_level: _LogValue(LogKind.multi, "accountlevel", "%d", (EvalKind.account_level,)),
     TokenKind.command_expr_duel_round: _LogValue(LogKind.multi, "duelround", "%d", (EvalKind.duel_round,)),
     TokenKind.command_expr_any_player_list: _LogValue(

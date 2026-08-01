@@ -24,6 +24,7 @@ from ..utils import (
     get_quest_name,
 )
 from .ast import (
+    AddExpression,
     AndExpression,
     CommandExpression,
     CommandKind,
@@ -44,6 +45,8 @@ from .ast import (
     InstructionKind,
     KeyExpression,
     ListExpression,
+    ModuloExpression,
+    MultiplyExpression,
     NumberExpression,
     OrExpression,
     PlayerSelector,
@@ -132,6 +135,14 @@ def _vm_error_from_group(error_group: BaseExceptionGroup) -> VMError | None:
         return vm_errors[0]
 
     return VMError("; ".join(messages))
+
+
+def _as_number(value: Any, expression: Expression) -> float:
+    """A calculation side, as a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise VMError(f"Expected a number in {expression}, got {value!r}")
+
+    return value
 
 
 def _as_bool(value: Any) -> Any:
@@ -689,12 +700,28 @@ class VM:
 
                 return left == right
 
-            case DivideExpression():
-                left: Any = await self.eval(expression.lhs, client)
-                right: Any = await self.eval(expression.rhs, client)
+            case AddExpression() | SubExpression() | MultiplyExpression():
+                left: float = _as_number(await self.eval(expression.lhs, client), expression)
+                right: float = _as_number(await self.eval(expression.rhs, client), expression)
+
+                if isinstance(expression, AddExpression):
+                    return left + right
+
+                if isinstance(expression, SubExpression):
+                    return left - right
+
+                return left * right
+
+            case DivideExpression() | ModuloExpression():
+                left: float = _as_number(await self.eval(expression.lhs, client), expression)
+                right: float = _as_number(await self.eval(expression.rhs, client), expression)
 
                 if right == 0:
-                    raise VMError(f"Division by zero in {expression}")
+                    act: str = "Modulo" if isinstance(expression, ModuloExpression) else "Division"
+                    raise VMError(f"{act} by zero in {expression}")
+
+                if isinstance(expression, ModuloExpression):
+                    return left % right
 
                 return left / right
 
@@ -753,13 +780,6 @@ class VM:
 
             case StackLocExpression():
                 return expression.offset
-
-            case SubExpression():
-                lhs: Any = await self.eval(expression.lhs, client)
-                rhs: Any = await self.eval(expression.rhs, client)
-                assert isinstance(lhs, (int, float))
-                assert isinstance(rhs, (int, float))
-                return lhs - rhs
 
             case ListExpression():
                 result: list[Any] = []

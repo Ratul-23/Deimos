@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
@@ -1018,6 +1019,20 @@ async def read_counter(ctx: StatContext) -> StatValue:
 
     # Raising sends the branch forward, which could kill the bot.
     return ctx.vm._counters.get(name.string, 0)
+
+
+@stat(EvalKind.timer)
+async def read_timer(ctx: StatContext) -> StatValue:
+    """Seconds since a named timer started."""
+    name: Any = ctx.eval.args[0]
+    assert isinstance(name, StringExpression), "Timer name must be a string"
+
+    started: float | None = ctx.vm._timers.get(name.string)
+
+    if started is None:
+        return 0
+
+    return asyncio.get_event_loop().time() - started
 
 
 @stat(EvalKind.potioncount)

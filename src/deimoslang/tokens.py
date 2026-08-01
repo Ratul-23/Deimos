@@ -138,6 +138,7 @@ class TokenKind(Enum):
     command_expr_playercountabove = auto()
     command_expr_playercountbelow = auto()
     command_expr_counter = auto()
+    command_expr_timer = auto()
 
     command_expr_tracking_quest = auto()
     command_expr_tracking_goal = auto()
@@ -158,6 +159,7 @@ class TokenKind(Enum):
     minus = auto()
     star = auto()
     slash = auto()
+    modulo = auto()
 
     slash_slash = auto()
     star_star = auto()
@@ -356,6 +358,7 @@ _EXPRESSION_COMMANDS: tuple[tuple[str, TokenKind], ...] = (
     ("playercountbelow", TokenKind.command_expr_playercountbelow),
     ("clientcountbelow", TokenKind.command_expr_playercountbelow),
     ("counter", TokenKind.command_expr_counter),
+    ("timer", TokenKind.command_expr_timer),
     ("trackingquest", TokenKind.command_expr_tracking_quest),
     ("trackinggoal", TokenKind.command_expr_tracking_goal),
     ("questchanged", TokenKind.command_expr_quest_changed),
@@ -410,6 +413,7 @@ _KIND_NAMES: dict[TokenKind, str] = {
     TokenKind.minus: "`-`",
     TokenKind.star: "`*`",
     TokenKind.slash: "`/`",
+    TokenKind.modulo: "`%`",
     TokenKind.slash_slash: "`//`",
     TokenKind.star_star: "`**`",
     TokenKind.paren_open: "`(`",
