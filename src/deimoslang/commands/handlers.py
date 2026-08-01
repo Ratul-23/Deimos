@@ -684,8 +684,17 @@ async def instr_setdeck(ctx: InstructionContext) -> None:
     assert isinstance(ctx.instruction.data, list)
     clients: list[SprintyClient] = ctx.vm._command_players(ctx.instruction.data[0])
     token: str = ctx.instruction.data[1]
+
+    if not token:
+        raise VMError("Could not read the deck token: it is empty")
+
     coder: DeckEncoderDecoder = DeckEncoderDecoder(token=token)
-    deck: dict = coder.decode()
+
+    try:
+        deck: dict = coder.decode()
+
+    except ValueError as error:
+        raise VMError(f"Could not read the deck token: {error}") from error
 
     async with asyncio.TaskGroup() as tg:
         for client in clients:

@@ -651,7 +651,13 @@ class Compiler:
                     case LogKind.multi:
                         self.emit(InstructionKind.log_multi, [com.player_selector, com.data[1]])
 
+                    # Nothing is read off a client. A selector would print it twice.
                     case LogKind.single:
+                        if com.player_selector is not None and not com.player_selector.mass:
+                            raise CompilerError(
+                                "This log line reads nothing off a client, so it cannot take a player selector"
+                            )
+
                         self.emit(InstructionKind.log_single, com.data[1])
 
                     case _:

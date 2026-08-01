@@ -58,6 +58,7 @@ from .ast import (
     XYZExpression,
     asks_any_player,
     describe_expression,
+    is_condition,
     operand_selector,
 )
 from .commands import EXPR_REGISTRY as EXPR_COMMAND_REGISTRY
@@ -69,6 +70,16 @@ from .tokens import describe, describe_any
 
 class ParserError(DeimosLangError):
     """Tokens do not form valid syntax."""
+
+
+def _written(token: Token) -> str:
+    """How a token was spelled."""
+    if not token.literal:
+        return describe(token.kind)
+
+    # A backtick string runs over several lines. The caret would come apart.
+    first_line: str = token.literal.splitlines()[0]
+    return f"`{first_line}`" if first_line == token.literal else f"`{first_line}...`"
 
 
 def _joined_parts(expr: Expression, joiner: type[AndExpression] | type[OrExpression]) -> list[Expression]:
@@ -166,7 +177,7 @@ class Parser:
         result: Token = self.tokens[self.pos]
 
         if result.kind not in kinds:
-            self.err(result, f"Expected {describe_any(kinds)} but got {describe(result.kind)}")
+            self.err(result, f"Expected {describe_any(kinds)} but got {_written(result)}")
 
         self.pos += 1
         return result
@@ -621,7 +632,14 @@ class Parser:
         """What a stat is compared against."""
         # A group opens a calculation. A plain number, not a percentage.
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.paren_open:
-            return self.parse_additive_expression(), False
+            opening: Token = self.tokens[self.pos]
+            grouped: Expression = self.parse_additive_expression()
+
+            # A group reaches the whole grammar. It may hold a check.
+            if is_condition(grouped):
+                self.err(opening, f"Expected a number, got {describe_expression(grouped)}")
+
+            return grouped, False
 
         first: Expression = self.parse_value(accepted)
         is_percent: bool = self.tokens[self.pos - 1].kind == TokenKind.percent
@@ -837,6 +855,10 @@ class Parser:
         if isinstance(expr, XYZExpression):
             self.err(self._token_for(expr, start, end), "Expected a condition, got a position")
 
+        # A calculation is a number too. It settles the branch as well.
+        if isinstance(expr, (AddExpression, SubExpression, MultiplyExpression, DivideExpression, ModuloExpression)):
+            self.err(self._token_for(expr, start, end), "Expected a condition, got a calculation")
+
         # Only operators that keep their operands in condition position.
         if isinstance(expr, (AndExpression, OrExpression)):
             for part in expr.expressions:
@@ -936,7 +958,7 @@ class Parser:
             if self.tokens[self.pos].kind not in expected_toks:
                 self.err(
                     self.tokens[self.pos],
-                    f"Invalid player selector: {describe(self.tokens[self.pos].kind)} does not belong here",
+                    f"Invalid player selector: {_written(self.tokens[self.pos])} does not belong here",
                 )
 
             match self.tokens[self.pos].kind:
@@ -972,7 +994,7 @@ class Parser:
                 case _:
                     self.err(
                         self.tokens[self.pos],
-                        f"Invalid player selector: {describe(self.tokens[self.pos].kind)} does not belong here",
+                        f"Invalid player selector: {_written(self.tokens[self.pos])} does not belong here",
                     )
 
         try:
@@ -1203,7 +1225,7 @@ class Parser:
             and "keyword" not in result.kind.name
             and "command" not in result.kind.name
         ):
-            self.err(result, "Unable to consume an identifier")
+            self.err(result, f"Expected a name, got {_written(result)}")
 
         self.pos += 1
         return IdentExpression(result.literal)
