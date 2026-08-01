@@ -591,17 +591,26 @@ _CONDITIONS: tuple[type[Expression], ...] = (
 )
 
 
+def is_condition(expr: Expression) -> bool:
+    """Whether a value reads true or false."""
+    # A `not` only ever fronts a condition.
+    if isinstance(expr, UnaryExpression):
+        return expr.operator == UnaryOp.not_
+
+    return isinstance(expr, _CONDITIONS)
+
+
 def describe_expression(expr: Expression) -> str:
     """A value's name for an error."""
-    # A minus sign says nothing about what follows it, and a `not` only ever fronts a condition.
-    if isinstance(expr, UnaryExpression):
-        return describe_expression(expr.expr) if expr.operator == UnaryOp.negate else "a condition"
+    # A minus sign says nothing about what follows it.
+    if isinstance(expr, UnaryExpression) and expr.operator == UnaryOp.negate:
+        return describe_expression(expr.expr)
 
     for kind, named in _EXPRESSION_NAMES.items():
         if isinstance(expr, kind):
             return named
 
-    if isinstance(expr, _CONDITIONS):
+    if is_condition(expr):
         return "a condition"
 
     return "something else"

@@ -9,10 +9,12 @@ from typing import TYPE_CHECKING, Any
 from wizwalker import Keycode
 
 from ..ast import (
+    AddExpression,
     ClickKind,
     CommandKind,
     ConstantReferenceExpression,
     CursorKind,
+    DivideExpression,
     Eval,
     EvalKind,
     Expression,
@@ -20,13 +22,17 @@ from ..ast import (
     KeyExpression,
     ListExpression,
     LogKind,
+    ModuloExpression,
+    MultiplyExpression,
     NumberExpression,
     StrFormatExpression,
     StringExpression,
+    SubExpression,
     TeleportKind,
     WaitforKind,
     XYZExpression,
     describe_expression,
+    is_condition,
 )
 from ..tokens import TokenKind
 
@@ -71,20 +77,41 @@ def nullary(_parser: Parser) -> list[Any]:
 # Written out in full. No command resolves them into something else.
 _LITERALS: tuple[type[Expression], ...] = (StringExpression, NumberExpression, ListExpression, XYZExpression)
 
+# A calculation only ever reads as a number.
+_CALCULATIONS: tuple[type[Expression], ...] = (
+    AddExpression,
+    SubExpression,
+    MultiplyExpression,
+    DivideExpression,
+    ModuloExpression,
+)
 
-def _reject_literal(parser: Parser, expr: Expression, wanted: str, allowed: type[Expression] | None = None) -> None:
-    """Refuse a literal the command can never use, since otherwise only the VM would say so."""
+
+def _reject_literal(
+    parser: Parser,
+    expr: Expression,
+    wanted: str,
+    allowed: type[Expression] | None = None,
+    allow_calculation: bool = False,
+) -> None:
+    """Refuse a value the command cannot use."""
     if allowed is not None and isinstance(expr, allowed):
         return
 
-    if isinstance(expr, _LITERALS):
+    # A check reads as true or false. No command takes that.
+    if is_condition(expr):
+        parser.err(parser.tokens[parser.pos - 1], f"Expected {wanted}, got {describe_expression(expr)}")
+
+    refused: tuple[type[Expression], ...] = _LITERALS if allow_calculation else _LITERALS + _CALCULATIONS
+
+    if isinstance(expr, refused):
         parser.err(parser.tokens[parser.pos - 1], f"Expected {wanted}, got {describe_expression(expr)}")
 
 
 def _duration(parser: Parser) -> Expression:
     """Parse a wait time."""
     expr: Expression = parser.parse_expression()
-    _reject_literal(parser, expr, "a number of seconds", NumberExpression)
+    _reject_literal(parser, expr, "a number of seconds", NumberExpression, allow_calculation=True)
     return expr
 
 
@@ -522,8 +549,8 @@ def parse_entity_teleport(parser: Parser) -> list[Any]:
 
 
 # Take no arguments.
-command(TokenKind.command_kill, CommandKind.kill, nullary)
-command(TokenKind.command_restart_bot, CommandKind.restart_bot, nullary)
+command(TokenKind.command_kill, CommandKind.kill, nullary, every_client=True)
+command(TokenKind.command_restart_bot, CommandKind.restart_bot, nullary, every_client=True)
 command(TokenKind.command_relog, CommandKind.relog, nullary)
 command(TokenKind.command_autopet, CommandKind.autopet, nullary)
 command(TokenKind.command_getdeck, CommandKind.getdeck, nullary)
@@ -533,7 +560,7 @@ command(TokenKind.command_set_quest, CommandKind.set_quest, nullary)
 
 
 # Take one value.
-command(TokenKind.command_sleep, CommandKind.sleep, duration)
+command(TokenKind.command_sleep, CommandKind.sleep, duration, every_client=True)
 command(TokenKind.command_goto, CommandKind.goto, xyz_or_expression)
 command(TokenKind.command_setdeck, CommandKind.setdeck, string_literal)
 
@@ -576,6 +603,7 @@ command(
     TokenKind.command_load_playstyle,
     CommandKind.load_playstyle,
     first_of(TokenKind.string, lambda parser: parser.expect_consume(TokenKind.string).value, "a playstyle name"),
+    every_client=True,
 )
 command(
     TokenKind.command_set_yaw,
