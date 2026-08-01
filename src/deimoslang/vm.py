@@ -59,6 +59,7 @@ from .ast import (
     UnaryOp,
     VMError,
     XYZExpression,
+    asks_any_player,
 )
 from .commands import HANDLERS as COMMAND_HANDLERS
 from .commands import INSTRUCTION_HANDLERS, EvalContext, ExecContext, InstructionContext, StatContext
@@ -565,18 +566,54 @@ class VM:
                     return 0.0
 
             case AndExpression():
+                matched: list[SprintyClient] | None = None
+
                 for expr in expression.expressions:
                     if not await self.eval(expr, client):
                         return False
 
+                    if not asks_any_player(expr):
+                        continue
+
+                    # Keep only the clients that answered every `any` so far.
+                    if matched is not None:
+                        self._any_player_client = [player for player in self._any_player_client if player in matched]
+
+                        if not self._any_player_client:
+                            return False
+
+                    matched = self._any_player_client
+
                 return True
 
             case OrExpression():
-                for expr in expression.expressions:
-                    if await self.eval(expr, client):
-                        return True
+                # Stopping at the first side that holds loses the clients the others matched.
+                if not any(asks_any_player(expr) for expr in expression.expressions):
+                    for expr in expression.expressions:
+                        if await self.eval(expr, client):
+                            return True
 
-                return False
+                    return False
+
+                gathered: list[SprintyClient] = []
+                held: bool = False
+
+                for expr in expression.expressions:
+                    # Once a side holds, only another `any` adds clients. Nothing else to ask.
+                    if held and not asks_any_player(expr):
+                        continue
+
+                    if not await self.eval(expr, client):
+                        continue
+
+                    held = True
+
+                    # Every `any` that held adds its clients. A later command aims at all.
+                    if asks_any_player(expr):
+                        gathered.extend(player for player in self._any_player_client if player not in gathered)
+
+                self._any_player_client = gathered
+                return held
 
             case CommandExpression():
                 return await self._eval_command_expression(expression)
@@ -601,14 +638,10 @@ class VM:
                         expr_result: Any = await self.eval(expression.expr, client)
 
                         # Negating flips the match. Later commands aim at the rest.
-                        if (
-                            isinstance(expression.expr, CommandExpression)
-                            and expression.expr.command.player_selector is not None
-                            and expression.expr.command.player_selector.any_player
-                        ):
-                            current_matches: list[SprintyClient] = self._any_player_client.copy()
+                        if asks_any_player(expression.expr):
+                            current_matches: list[SprintyClient] = self._any_player_client
                             self._any_player_client = [
-                                client for client in self._clients if client not in current_matches
+                                player for player in self._clients if player not in current_matches
                             ]
 
                         return not expr_result

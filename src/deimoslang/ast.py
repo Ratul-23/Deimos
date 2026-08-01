@@ -197,6 +197,9 @@ class PlayerSelector:
         self.same_any: bool = False
         self.negated: bool = False
 
+        # Written nothing, so `any X and Y` can narrow it.
+        self.implicit: bool = False
+
     def validate(self) -> None:
         """Check the selector, then sort it."""
         if self.mass and self.inverted:
@@ -577,6 +580,30 @@ def describe_expression(expr: Expression) -> str:
         return "a condition"
 
     return "something else"
+
+
+def operand_selector(expr: Expression) -> PlayerSelector | None:
+    """The selector one side carries."""
+    if isinstance(expr, CommandExpression):
+        return expr.command.player_selector
+
+    if isinstance(expr, SelectorGroup):
+        return expr.players
+
+    return None
+
+
+def asks_any_player(expr: Expression) -> bool:
+    """Whether `anyplayer` appears anywhere."""
+    if isinstance(expr, AndExpression | OrExpression):
+        return any(asks_any_player(part) for part in expr.expressions)
+
+    # A `not` still leaves matched clients, just the other ones.
+    if isinstance(expr, UnaryExpression) and expr.operator == UnaryOp.not_:
+        return asks_any_player(expr.expr)
+
+    selector: PlayerSelector | None = operand_selector(expr)
+    return selector is not None and selector.any_player
 
 
 class Stmt:
