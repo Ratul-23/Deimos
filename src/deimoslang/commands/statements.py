@@ -134,6 +134,15 @@ def _starts_window_path(parser: Parser, pos: int) -> bool:
     return token.kind == TokenKind.square_open or (token.kind == TokenKind.identifier and token.literal.startswith("$"))
 
 
+def _starts_position(parser: Parser) -> bool:
+    """Whether an `XYZ(...)` or a $constant naming one begins at the next token."""
+    if parser.pos >= len(parser.tokens):
+        return False
+
+    token: Token = parser.tokens[parser.pos]
+    return token.kind == TokenKind.keyword_xyz or (token.kind == TokenKind.identifier and token.literal.startswith("$"))
+
+
 def _position(parser: Parser) -> Expression:
     """Parse a position."""
     if _looks_like_xyz(parser):
@@ -521,7 +530,7 @@ def parse_friend_teleport(parser: Parser) -> list[Any]:
 
 
 def parse_entity_teleport(parser: Parser) -> list[Any]:
-    """Parse a teleport to a named entity, walking there if asked."""
+    """Parse a teleport to a named entity."""
     nav_mode: bool = False
 
     # Leading nav walks instead of teleporting straight on.
@@ -543,6 +552,9 @@ def parse_entity_teleport(parser: Parser) -> list[Any]:
         token: Token = parser.tokens[parser.pos]
         parser.pos += 1
         data: list[Any] = [TeleportKind.entity_vague, token.literal]
+
+    # Position here offsets the entity, like plustp.
+    data.append(_position(parser) if _starts_position(parser) else None)
 
     # Kind stays first so the VM dispatches before looking for nav.
     if nav_mode:
