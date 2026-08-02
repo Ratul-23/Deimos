@@ -187,6 +187,11 @@ class Tokenizer:
                     case "&":
                         err("Unexpected &", pos)
 
+                    # A star never starts a token. p* would split in two.
+                    case "p" | "P" if pos + 1 < len(line) and line[pos + 1] == "*":
+                        put_simple(TokenKind.player_all, line[pos : pos + 2])
+                        pos += 2
+
                     case ":":
                         put_simple(TokenKind.colon, char)
                         pos += 1

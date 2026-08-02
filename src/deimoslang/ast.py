@@ -199,6 +199,9 @@ class PlayerSelector:
         self.same_any: bool = False
         self.negated: bool = False
 
+        # Written `p*`. Names whoever called the block.
+        self.callers: bool = False
+
         # Written nothing, so `any X and Y` can narrow it.
         self.implicit: bool = False
 
@@ -219,13 +222,19 @@ class PlayerSelector:
         if self.same_any and (self.mass or len(self.player_nums) > 0):
             raise SelectorError("sameany cannot be combined with mass or named clients")
 
+        if self.callers and (
+            self.mass or self.inverted or self.any_player or self.same_any or len(self.player_nums) > 0
+        ):
+            raise SelectorError("p* names the clients that called, so it stands alone")
+
         # Sorting makes p2,p1 and p1,p2 the same selector.
         self.player_nums.sort()
 
     def __repr__(self) -> str:
         return (
             f"PlayerSelector(nums: {self.player_nums}, mass: {self.mass}, inverted: {self.inverted}, "
-            f"any_player: {self.any_player}, same_any: {self.same_any}, negated: {self.negated})"
+            f"any_player: {self.any_player}, same_any: {self.same_any}, negated: {self.negated}, "
+            f"callers: {self.callers})"
         )
 
 
@@ -801,13 +810,14 @@ class BlockDefStmt(Stmt):
 
 
 class CallStmt(Stmt):
-    """Calls a named block."""
+    """Calls a block on some clients."""
 
-    def __init__(self, name: Expression) -> None:
+    def __init__(self, name: Expression, player_selector: PlayerSelector) -> None:
         self.name: Expression = name
+        self.player_selector: PlayerSelector = player_selector
 
     def __repr__(self) -> str:
-        return f"CallS {self.name}"
+        return f"CallS {self.name} @ {self.player_selector}"
 
 
 class DefVarStmt(Stmt):

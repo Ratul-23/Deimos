@@ -8,6 +8,7 @@ class TokenKind(Enum):
     """Every token kind."""
 
     player_num = auto()
+    player_all = auto()
     string = auto()
     number = auto()
     contains = auto()
@@ -397,10 +398,14 @@ def _merge_keywords(*groups: tuple[tuple[str, TokenKind], ...]) -> dict[str, Tok
 
 KEYWORDS: dict[str, TokenKind] = _merge_keywords(_SYNTAX_KEYWORDS, _STATEMENT_COMMANDS, _EXPRESSION_COMMANDS)
 
+# Tells a keyword from a name a script made up.
+KEYWORD_KINDS: frozenset[TokenKind] = frozenset(KEYWORDS.values())
+
 
 # Kinds with no word to spell them, named as a script would.
 _KIND_NAMES: dict[TokenKind, str] = {
     TokenKind.player_num: "a client such as p1",
+    TokenKind.player_all: "`p*`",
     TokenKind.string: "a quoted string",
     TokenKind.number: "a number",
     TokenKind.percent: "a percentage",

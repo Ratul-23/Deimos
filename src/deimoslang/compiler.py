@@ -728,9 +728,15 @@ class Compiler:
         # Second pass swaps each label for a jump distance.
         for idx, instr in enumerate(program):
             match instr.kind:
-                case InstructionKind.call | InstructionKind.jump:
-                    sym = instr.data
+                case InstructionKind.call:
+                    assert isinstance(instr.data, list)
+                    sym = instr.data[0]
                     offset: int = label_offset(sym)
+                    instr.data[0] = offset - idx
+
+                case InstructionKind.jump:
+                    sym = instr.data
+                    offset = label_offset(sym)
                     instr.data = offset - idx
 
                 case InstructionKind.jump_if | InstructionKind.jump_ifn:
@@ -769,7 +775,7 @@ class Compiler:
     def compile_call(self, call: CallStmt) -> None:
         """Emit a call to a named block."""
         if isinstance(call.name, SymExpression):
-            self.emit(InstructionKind.call, call.name.sym)
+            self.emit(InstructionKind.call, [call.name.sym, call.player_selector])
 
         elif isinstance(call.name, IdentExpression):
             raise CompilerError(f"Encountered an unresolved call during compilation: {call}")
