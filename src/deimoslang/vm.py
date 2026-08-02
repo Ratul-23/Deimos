@@ -73,6 +73,8 @@ from .commands.predicates import Predicate, StatEvaluator, StatValue
 from .compiler import Compiler
 from .lexer import LineInfo
 
+MAX_STACK_DEPTH: int = 1024
+
 
 class Task:
     """One running program."""
@@ -1094,6 +1096,13 @@ class VM:
             # The stack doubles as the return stack. A call pushes where to come back.
             case InstructionKind.call:
                 assert isinstance(instruction.data, int)
+
+                if len(self.current_task.stack) >= MAX_STACK_DEPTH:
+                    raise VMError(
+                        f"Nested more than {MAX_STACK_DEPTH} deep without returning. "
+                        "A block that calls itself never stops"
+                    )
+
                 self.current_task.stack.append(self.current_task.ip + 1)
                 self.current_task.ip += instruction.data
 

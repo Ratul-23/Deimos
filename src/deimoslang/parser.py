@@ -1,5 +1,7 @@
 """Tokens into a syntax tree."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import NoReturn
 
 from .ast import (
@@ -69,6 +71,10 @@ from .tokens import describe, describe_any
 
 class ParserError(DeimosLangError):
     """Tokens do not form valid syntax."""
+
+
+# Analyzer, compiler and VM recurse too. One cap covers them.
+MAX_NESTING: int = 64
 
 
 def _written(token: Token) -> str:
@@ -150,6 +156,21 @@ class Parser:
     def __init__(self, tokens: list[Token]) -> None:
         self.tokens: list[Token] = tokens
         self.pos: int = 0
+        self._depth: int = 0
+
+    @contextmanager
+    def _nested(self) -> Iterator[None]:
+        """Count one level, refusing too deep."""
+        self._depth += 1
+
+        if self._depth > MAX_NESTING:
+            self.err(self.tokens[min(self.pos, len(self.tokens) - 1)], f"Nested more than {MAX_NESTING} deep")
+
+        try:
+            yield
+
+        finally:
+            self._depth -= 1
 
     def err_manual(self, line_info: LineInfo, msg: str) -> NoReturn:
         """Raise a ParserError at a location."""
@@ -398,7 +419,9 @@ class Parser:
 
         if self.tokens[self.pos].kind in kinds:
             self.expect_consume_any(kinds)
-            return UnaryExpression(UnaryOp.negate, self.parse_unary_expression())
+
+            with self._nested():
+                return UnaryExpression(UnaryOp.negate, self.parse_unary_expression())
 
         else:
             return self.parse_atom()
@@ -928,7 +951,8 @@ class Parser:
 
     def parse_expression(self) -> Expression:
         """Parse a full expression."""
-        return self.parse_logical_expression()
+        with self._nested():
+            return self.parse_logical_expression()
 
     def parse_player_selector(self) -> PlayerSelector:
         """Parse a command's client selector."""
@@ -1186,8 +1210,9 @@ class Parser:
         self.expect_consume(TokenKind.curly_open)
         self.end_line_optional()
 
-        while self.pos < len(self.tokens) and self.tokens[self.pos].kind != TokenKind.curly_close:
-            inner.append(self.parse_stmt())
+        with self._nested():
+            while self.pos < len(self.tokens) and self.tokens[self.pos].kind != TokenKind.curly_close:
+                inner.append(self.parse_stmt())
 
         self.expect_consume(TokenKind.curly_close)
         self.end_line_optional()
