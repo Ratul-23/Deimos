@@ -175,12 +175,15 @@ async def _tp_by_offset(ctx: ExecContext, tg: asyncio.TaskGroup, sign: int) -> N
 
 
 async def _tp_to_entity(ctx: ExecContext, tg: asyncio.TaskGroup, vague: bool) -> None:
-    """Teleport every client to the closest entity a name picks out."""
-    # A nav marker sits just before the name, and means walk there rather than teleport.
-    use_navmap: bool = len(ctx.args) > 2 and ctx.args[-2] == TeleportKind.nav
+    """Teleport to the closest named entity."""
+    use_navmap: bool = TeleportKind.nav in ctx.args
 
     # The parser always hands over a string, but a constant standing in for it may hold anything.
-    name: str = str(await ctx.eval_arg(ctx.args[-1], ctx.clients[0]))
+    name: str = str(await ctx.eval_arg(ctx.args[-2], ctx.clients[0]))
+
+    # Read up front. Bad position errors even with no entity nearby.
+    offset: Any = ctx.args[-1]
+    step: XYZ | None = None if offset is None else _as_xyz(await ctx.eval_arg(offset, ctx.clients[0]))
 
     async def tp_to_closest(client: SprintyClient) -> None:
         """Teleport one client to that entity."""
@@ -190,6 +193,9 @@ async def _tp_to_entity(ctx: ExecContext, tg: asyncio.TaskGroup, vague: bool) ->
 
         if entity:
             pos: XYZ = await entity.location()
+
+            if step is not None:
+                pos = XYZ(pos.x + step.x, pos.y + step.y, pos.z + step.z)
 
             if use_navmap:
                 await collision_tp(client, pos)
