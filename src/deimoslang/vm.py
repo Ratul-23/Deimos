@@ -174,12 +174,21 @@ class UntilInfo:
     """A running `until` and its exit."""
 
     def __init__(
-        self, expr: Expression, id: int, exit_point: int, stack_size: int, line_info: LineInfo | None = None
+        self,
+        expr: Expression,
+        id: int,
+        exit_point: int,
+        stack_size: int,
+        scopes: list[list[SprintyClient]],
+        line_info: LineInfo | None = None,
     ) -> None:
         self.expr: Expression = expr
         self.id: int = id
         self.exit_point: int = exit_point
         self.stack_size: int = stack_size
+
+        # The call scopes when this until started. A poll reads the same clients.
+        self.scopes: list[list[SprintyClient]] = scopes
         self.line_info: LineInfo | None = line_info
 
 
@@ -195,6 +204,9 @@ class VM:
         self._scheduler.add_task(Task())
         self.current_task: Task = self._scheduler.get_current_task()
         self._any_player_client: list[SprintyClient] = []
+
+        # The clients each running call was made on, newest last.
+        self._call_scopes: list[list[SprintyClient]] = []
         self.on_toggle_combat: Callable[[bool | None], Awaitable[None]] | None = None
         self.on_restart_client: Callable[[list[SprintyClient]], Awaitable[list[Client | None]]] | None = None
         self._timers: dict[str, float] = {}
@@ -225,6 +237,7 @@ class VM:
         self._timers = {}
         self._counters = {}
         self._any_player_client = []
+        self._call_scopes = []
         self._constants = {
             "True": True,
             "False": False,
@@ -280,7 +293,13 @@ class VM:
                 self._clients[index] = upgraded
 
         # A dead client cannot answer anyplayer. Its replacement never passed one.
-        self._any_player_client = [client for client in self._any_player_client if client in self._clients]
+        self._any_player_client = self._living(self._any_player_client)
+
+        # A call it joined carries on without it, untils included.
+        self._call_scopes = [self._living(scope) for scope in self._call_scopes]
+
+        for info in self._until_infos:
+            info.scopes = [self._living(scope) for scope in info.scopes]
 
     async def select_friend_from_list(self, client: SprintyClient, name: str) -> bool:
         """Pick a friend from the list."""
@@ -330,8 +349,20 @@ class VM:
 
             return True
 
+    def _living(self, clients: list[SprintyClient]) -> list[SprintyClient]:
+        """The clients still open."""
+        return [client for client in clients if client in self._clients]
+
+    def _current_scope(self) -> list[SprintyClient]:
+        """The clients the running call has."""
+        return self._call_scopes[-1] if self._call_scopes else self._clients
+
     def _select_players(self, selector: PlayerSelector) -> list[SprintyClient]:
         """The clients a selector resolves to."""
+        # A block lends its callers to `p*` and to whatever names nobody.
+        if selector.callers or selector.implicit:
+            return self._current_scope()
+
         if selector.mass:
             return self._clients
 
@@ -970,6 +1001,7 @@ class VM:
         """Jump out if an `until` holds."""
         # Polling must not rewrite what sameany and anyplayer read.
         watching: list[SprintyClient] = self._any_player_client
+        running_scopes: list[list[SprintyClient]] = self._call_scopes
         self._polling_untils = True
 
         try:
@@ -978,6 +1010,7 @@ class VM:
                 info: UntilInfo = self._until_infos[index]
 
                 try:
+                    self._call_scopes = info.scopes
                     # An until that ends hands its own clients on.
                     if await self.eval(info.expr):
                         self.current_task.ip = info.exit_point
@@ -994,6 +1027,7 @@ class VM:
 
         finally:
             self._polling_untils = False
+            self._call_scopes = running_scopes
 
         self._any_player_client = watching
 
@@ -1172,18 +1206,30 @@ class VM:
 
             # The stack doubles as the return stack. A call pushes where to come back.
             case InstructionKind.call:
-                assert isinstance(instruction.data, int)
+                assert isinstance(instruction.data, list)
+                offset, selector = instruction.data
+                callers: list[SprintyClient] = self._command_players(selector)
 
-                if len(self.current_task.stack) >= MAX_STACK_DEPTH:
-                    raise VMError(
-                        f"Nested more than {MAX_STACK_DEPTH} deep without returning. "
-                        "A block that calls itself never stops"
-                    )
+                # Nobody to run it on, so the block is stepped over whole.
+                if not callers:
+                    self.current_task.ip += 1
 
-                self.current_task.stack.append(self.current_task.ip + 1)
-                self.current_task.ip += instruction.data
+                else:
+                    if len(self.current_task.stack) >= MAX_STACK_DEPTH:
+                        raise VMError(
+                            f"Nested more than {MAX_STACK_DEPTH} deep without returning. "
+                            "A block that calls itself never stops"
+                        )
+
+                    # Copied. sameany hands over a list anyplayer appends to.
+                    self._call_scopes.append(list(callers))
+                    self.current_task.stack.append(self.current_task.ip + 1)
+                    self.current_task.ip += offset
 
             case InstructionKind.ret:
+                if self._call_scopes:
+                    self._call_scopes.pop()
+
                 self.current_task.ip = self.current_task.stack.pop()
 
             case InstructionKind.enter_until:
@@ -1194,6 +1240,7 @@ class VM:
                         id=instruction.data[1],
                         exit_point=self.current_task.ip + instruction.data[2],
                         stack_size=len(self.current_task.stack),
+                        scopes=list(self._call_scopes),
                         line_info=instruction.line_info,
                     )
                 )
@@ -1207,6 +1254,9 @@ class VM:
                     if info.id == instruction.data:
                         self._until_infos = self._until_infos[:index]
                         self.current_task.stack = self.current_task.stack[: info.stack_size]
+
+                        # Leaving the region abandons the calls it opened. Their scopes go too.
+                        self._call_scopes = self._call_scopes[: len(info.scopes)]
                         break
 
                 self.current_task.ip += 1

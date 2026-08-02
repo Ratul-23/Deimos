@@ -67,7 +67,7 @@ from .commands import EXPR_REGISTRY as EXPR_COMMAND_REGISTRY
 from .commands import REGISTRY as COMMAND_REGISTRY
 from .commands import CommandSpec, ExprSpec
 from .lexer import DeimosLangError, LineInfo, Token, TokenKind
-from .tokens import describe, describe_any
+from .tokens import KEYWORD_KINDS, describe, describe_any
 
 
 class ParserError(DeimosLangError):
@@ -1031,6 +1031,7 @@ class Parser:
             TokenKind.keyword_mass,
             TokenKind.keyword_except,
             TokenKind.player_num,
+            TokenKind.player_all,
             TokenKind.colon,
         ]
         expected_toks: list[TokenKind] = [
@@ -1039,6 +1040,7 @@ class Parser:
             TokenKind.keyword_mass,
             TokenKind.keyword_except,
             TokenKind.player_num,
+            TokenKind.player_all,
         ]
 
         # expected_toks narrows as the selector is read. That rejects `p1 mass`.
@@ -1075,6 +1077,11 @@ class Parser:
                     expected_toks = [TokenKind.colon]
                     self.pos += 1
 
+                case TokenKind.player_all:
+                    result.callers = True
+                    expected_toks = []
+                    self.pos += 1
+
                 case TokenKind.colon:
                     expected_toks = [TokenKind.player_num]
                     self.pos += 1
@@ -1091,7 +1098,13 @@ class Parser:
             self.err(self.tokens[self.pos - 1], f"Invalid player selector: {error}")
 
         # A command written without a selector applies to every client.
-        if len(result.player_nums) == 0 and not result.mass and not result.any_player and not result.same_any:
+        if (
+            len(result.player_nums) == 0
+            and not result.mass
+            and not result.any_player
+            and not result.same_any
+            and not result.callers
+        ):
             result.mass = True
             result.implicit = True
 
@@ -1248,13 +1261,20 @@ class Parser:
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.END_LINE:
             self.pos += 1
 
-    def parse_command(self) -> Command:
-        """Parse one command via its registry spec."""
+    def parse_command(self, player_selector: PlayerSelector) -> Command:
+        """Parse one command from its spec."""
         result: Command = Command()
-        result.player_selector = self.parse_player_selector()
+        result.player_selector = player_selector
 
         spec: CommandSpec | None = COMMAND_REGISTRY.get(self.tokens[self.pos].kind)
         if spec is None:
+            # A selector was written. A keyword after it aims at clients that cannot take it.
+            if not player_selector.implicit and self.tokens[self.pos].kind in KEYWORD_KINDS:
+                self.err(
+                    self.tokens[self.pos],
+                    f"{_written(self.tokens[self.pos])} is not a command, so it cannot take a player selector",
+                )
+
             self.err(self.tokens[self.pos], "Unhandled command token")
 
         # Some commands hit the whole game. A selector on them would be a lie.
@@ -1352,12 +1372,6 @@ class Parser:
                 body: StmtList = self.parse_block()
                 return BlockDefStmt(ident, body)
 
-            case TokenKind.keyword_call:
-                self.pos += 1
-                ident: IdentExpression = self.consume_any_ident()
-                self.end_line()
-                return CallStmt(ident)
-
             case TokenKind.keyword_loop:
                 self.pos += 1
                 body: StmtList = self.parse_block()
@@ -1454,9 +1468,17 @@ class Parser:
                 self.end_line()
                 return MixinStmt(ident.ident)
 
-            # No keyword opened the line, so it must be a command.
+            # A selector may front a call or a command, so read it first.
             case _:
-                return CommandStmt(self.parse_command())
+                selector: PlayerSelector = self.parse_player_selector()
+
+                if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.keyword_call:
+                    self.pos += 1
+                    call_name: IdentExpression = self.consume_any_ident()
+                    self.end_line()
+                    return CallStmt(call_name, selector)
+
+                return CommandStmt(self.parse_command(selector))
 
     def parse(self) -> list[Stmt]:
         """Parse the whole program."""
