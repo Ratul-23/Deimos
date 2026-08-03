@@ -1,5 +1,6 @@
 """Tokens, and the errors scripts cause."""
 
+from math import isfinite
 from typing import Any, Never
 
 from .tokens import KEYWORDS, TokenKind
@@ -109,6 +110,17 @@ class Token:
 def normalize_ident(dirty: str) -> str:
     """Lowercase a name, strip underscores."""
     return dirty.lower().replace("_", "")
+
+
+def _written_number(text: str) -> float:
+    """A written number, kept whole."""
+    value: float = float(text)
+
+    # Infinity is not whole. Asking raises.
+    if "." not in text and isfinite(value) and value.is_integer():
+        return int(value)
+
+    return value
 
 
 class Tokenizer:
@@ -313,7 +325,7 @@ class Tokenizer:
 
                                 else:
                                     try:
-                                        put_simple(TokenKind.number, full, float(full))
+                                        put_simple(TokenKind.number, full, _written_number(full))
                                     except ValueError:
                                         err("Unable to convert to number", pos)
 
@@ -322,7 +334,7 @@ class Tokenizer:
                                 number_text: str = full[: full.index("/")]
 
                                 try:
-                                    put_simple(TokenKind.number, number_text, float(number_text))
+                                    put_simple(TokenKind.number, number_text, _written_number(number_text))
                                 except ValueError:
                                     err("Unable to convert to number", pos)
 

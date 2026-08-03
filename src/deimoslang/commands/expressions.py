@@ -147,19 +147,13 @@ def parse_items_dropped(parser: Parser, selector: PlayerSelector, _token: TokenK
 
 
 def parse_counter(parser: Parser, selector: PlayerSelector, _token: TokenKind) -> Expression:
-    """Parse `counter <name>` and its numeric comparison."""
-    parser.pos += 1
-    name: IdentExpression = parser.consume_any_ident()
-    evaluated: Eval = Eval(EvalKind.counter, [StringExpression(name.ident)])
-    return parser.parse_numeric_comparison(evaluated, selector)
+    """Parse `counter <name>`, compared or read."""
+    return parser.parse_named_number(EvalKind.counter, selector)
 
 
 def parse_timer(parser: Parser, selector: PlayerSelector, _token: TokenKind) -> Expression:
-    """Parse `timer <name>` and its numeric comparison, in seconds."""
-    parser.pos += 1
-    name: IdentExpression = parser.consume_any_ident()
-    evaluated: Eval = Eval(EvalKind.timer, [StringExpression(name.ident)])
-    return parser.parse_numeric_comparison(evaluated, selector)
+    """Parse `timer <name>`, compared or read as seconds."""
+    return parser.parse_named_number(EvalKind.timer, selector)
 
 
 def parse_window_num(parser: Parser, selector: PlayerSelector, _token: TokenKind) -> Expression:

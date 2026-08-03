@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from math import isfinite
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
@@ -106,12 +107,19 @@ def instruction_handler(name: str) -> Callable[[InstructionHandler], Instruction
 
 
 def _as_number(value: Any) -> float:
-    """A resolved argument as a number, or a clear error when it is not one."""
+    """An argument as a number."""
+    # Whole number grows without limit. Too big to weigh lands here.
     try:
-        return float(value)
+        number: float = float(value)
 
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise VMError(f"Expected a number, got {value!r}") from None
+
+    # Handlers round down. Infinity has no whole number.
+    if not isfinite(number):
+        raise VMError(f"Expected a number, got {value!r}")
+
+    return number
 
 
 def _as_xyz(value: Any) -> XYZ:
@@ -683,7 +691,10 @@ async def instr_setdeck(ctx: InstructionContext) -> None:
 
     assert isinstance(ctx.instruction.data, list)
     clients: list[SprintyClient] = ctx.vm._command_players(ctx.instruction.data[0])
-    token: str = ctx.instruction.data[1]
+    token: Any = await ctx.vm._extract_data_info(ctx.instruction.data[1])
+
+    if not isinstance(token, str):
+        raise VMError(f"Could not read the deck token: {token!r} is not text")
 
     if not token:
         raise VMError("Could not read the deck token: it is empty")
