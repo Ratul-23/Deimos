@@ -207,17 +207,20 @@ class VM:
 
         # The clients each running call was made on, newest last.
         self._call_scopes: list[list[SprintyClient]] = []
-        self.on_toggle_combat: Callable[[bool | None], Awaitable[None]] | None = None
-        self.on_restart_client: Callable[[list[SprintyClient]], Awaitable[list[Client | None]]] | None = None
-        self._timers: dict[str, float] = {}
-        self._counters: dict[str, int] = {}
-        self.logged_data: dict[str, dict[str, str | None]] = {"goal": {}, "quest": {}, "zone": {}}
 
         # True and False are defined up front so `$True` and `$False` resolve without being declared.
         self._variables: dict[str, Any] = {
             "True": True,
             "False": False,
         }
+
+        # Names a const claimed, which nothing may assign to again.
+        self._constant_names: set[str] = {"True", "False"}
+        self.on_toggle_combat: Callable[[bool | None], Awaitable[None]] | None = None
+        self.on_restart_client: Callable[[list[SprintyClient]], Awaitable[list[Client | None]]] | None = None
+        self._timers: dict[str, float] = {}
+        self._counters: dict[str, int] = {}
+        self.logged_data: dict[str, dict[str, str | None]] = {"goal": {}, "quest": {}, "zone": {}}
 
         self._until_infos: list[UntilInfo] = []
 
@@ -242,6 +245,7 @@ class VM:
             "True": True,
             "False": False,
         }
+        self._constant_names = {"True", "False"}
         self.logged_data = {"goal": {}, "quest": {}, "zone": {}}
 
     def stop(self) -> None:
@@ -253,8 +257,15 @@ class VM:
         self.stop()
         self.killed = True
 
-    async def define_variable(self, name: str, value: Any) -> None:
-        """Set a variable to whatever was written, without reading anything into it."""
+    async def define_variable(self, name: str, value: Any, constant: bool = False) -> None:
+        """Set a variable, never a const."""
+        # A const keeps what it was given. No later write.
+        if name in self._constant_names:
+            raise VMError(f"{name} is a const, so it cannot be changed")
+
+        if constant:
+            self._constant_names.add(name)
+
         self._variables[name] = value
 
     def load_from_text(self, code: str, filename: str | None = None) -> None:
@@ -601,7 +612,7 @@ class VM:
 
     async def _eval_operand(self, side: Expression, client: Client | None) -> Any:
         """A value that must be a number."""
-        # A name nothing was declared under reads as the word itself, which is never the number wanted.
+        # A name standing for nothing reads as the word itself. Never a number.
         if isinstance(side, IdentExpression) and side.ident not in self._variables:
             raise UnknownNameError(f"Unknown name: {side.ident}")
 
@@ -623,7 +634,7 @@ class VM:
                 raise UnknownNameError(f"Unknown name: ${expression.name}")
 
             case BooleanExpression():
-                # `true` and `false` are spelled as text, but a variable declared from one holds a boolean.
+                # `true` and `false` are text, but hold a boolean once declared.
                 return _as_bool(await self.eval(expression.value, client))
 
             case VariableCheckExpression():
@@ -763,7 +774,7 @@ class VM:
             case KeyExpression():
                 key: str = expression.key
 
-                # A name that is not a key itself may be a variable naming one, read only where a key is wanted.
+                # A name that is not a key may be a variable naming one.
                 if key not in Keycode.__members__:
                     held: Any = self._variables.get(key.removeprefix("$"))
 
@@ -1078,9 +1089,9 @@ class VM:
                 logger.debug("Bot Restarted")
 
             case InstructionKind.declare_variable:
-                name, expr = instruction.data
+                name, expr, constant = instruction.data
                 value: Any = await self.eval(expr)
-                await self.define_variable(name, value)
+                await self.define_variable(name, value, constant)
                 self.current_task.ip += 1
 
             case InstructionKind.start_timer:

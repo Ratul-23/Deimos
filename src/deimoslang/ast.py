@@ -572,7 +572,6 @@ class Eval(Expression):
         return f"Eval({self.kind})"
 
 
-# What to call a parsed value in an error, so a message names what was written rather than the class.
 _EXPRESSION_NAMES: dict[type[Expression], str] = {
     StringExpression: "a quoted string",
     NumberExpression: "a number",
@@ -594,7 +593,7 @@ _EXPRESSION_NAMES: dict[type[Expression], str] = {
     StrFormatExpression: "a formatted string",
 }
 
-# Everything that reads as true or false, which is worth naming as one category rather than nine.
+# Everything that reads as true or false.
 _CONDITIONS: tuple[type[Expression], ...] = (
     CommandExpression,
     SelectorGroup,
@@ -665,14 +664,15 @@ class Stmt:
 
 
 class VariableDeclStmt(Stmt):
-    """A `con name = value` declaration."""
+    """A `var` or an unchanging `const`."""
 
-    def __init__(self, name: str, value: Expression) -> None:
+    def __init__(self, name: str, value: Expression, constant: bool = False) -> None:
         self.name: str = name
         self.value: Expression = value
+        self.constant: bool = constant
 
     def __repr__(self) -> str:
-        return f"VarDeclS({self.name}, {self.value})"
+        return f"{'ConstDeclS' if self.constant else 'VarDeclS'}({self.name}, {self.value})"
 
 
 class StmtList(Stmt):
@@ -875,7 +875,7 @@ class Symbol:
         return f"{self.literal}:{self.id}_{self.kind.name}"
 
 
-# This lives here rather than in vm.py because the command modules raise it, and vm.py imports them.
+# Here, not vm.py: the command modules raise it and vm.py imports them.
 class VMError(LocatedError):
     """An instruction cannot be carried out."""
 

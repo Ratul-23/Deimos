@@ -832,7 +832,7 @@ class Parser:
 
                 self.pos += 1
 
-                # `$x` and `x` name the same variable, so the $ would look one up that was never declared.
+                # `$x` and `x` name the same variable. The $ would look up nothing.
                 checked: str = ident.removeprefix("$")
 
                 if self.pos < len(self.tokens):
@@ -1336,7 +1336,8 @@ class Parser:
     def _parse_stmt_inner(self) -> Stmt:
         """Parse one statement."""
         match self.tokens[self.pos].kind:
-            case TokenKind.keyword_con:
+            case TokenKind.keyword_const | TokenKind.keyword_var:
+                constant: bool = self.tokens[self.pos].kind == TokenKind.keyword_const
                 self.pos += 1
 
                 # Every other name may be spelled with a keyword. A variable may too.
@@ -1344,7 +1345,7 @@ class Parser:
                 self.expect_consume(TokenKind.equals)
                 expr: Expression = self.parse_expression()
                 self.end_line()
-                return VariableDeclStmt(var_name, expr)
+                return VariableDeclStmt(var_name, expr, constant)
 
             case TokenKind.keyword_starttimer | TokenKind.keyword_resettimer | TokenKind.keyword_endtimer:
                 timer_action: TimerAction = _TIMER_ACTIONS[self.tokens[self.pos].kind]

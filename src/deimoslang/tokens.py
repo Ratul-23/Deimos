@@ -58,7 +58,8 @@ class TokenKind(Enum):
     keyword_minusone = auto()
     keyword_same_any = auto()
     keyword_isbetween = auto()
-    keyword_con = auto()
+    keyword_const = auto()
+    keyword_var = auto()
 
     command_kill = auto()
     command_sleep = auto()
@@ -237,10 +238,11 @@ _SYNTAX_KEYWORDS: tuple[tuple[str, TokenKind], ...] = (
     ("sameanyclient", TokenKind.keyword_same_any),
     ("isbetween", TokenKind.keyword_isbetween),
     ("between", TokenKind.keyword_isbetween),
-    ("var", TokenKind.keyword_con),
-    ("con", TokenKind.keyword_con),
-    ("set", TokenKind.keyword_con),
-    ("setvar", TokenKind.keyword_con),
+    ("const", TokenKind.keyword_const),
+    ("con", TokenKind.keyword_const),
+    ("var", TokenKind.keyword_var),
+    ("set", TokenKind.keyword_var),
+    ("setvar", TokenKind.keyword_var),
 )
 
 _STATEMENT_COMMANDS: tuple[tuple[str, TokenKind], ...] = (

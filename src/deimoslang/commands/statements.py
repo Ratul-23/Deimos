@@ -312,8 +312,7 @@ def key_with_optional_expression(parser: Parser) -> list[Any]:
     """Parse a key and an optional duration."""
     key: KeyExpression = parser.parse_key()
 
-    # The game names its keys, so a wrong one is worth catching here rather than mid-run. A $name says
-    # the key comes from a variable, which only the VM can look up.
+    # Only the VM can look a $name up. Check written keys only.
     if not key.key.startswith("$") and key.key not in Keycode.__members__:
         parser.err(parser.tokens[parser.pos - 1], f"Unknown key: {key.key}")
 
@@ -515,7 +514,7 @@ def parse_friend_teleport(parser: Parser) -> list[Any]:
     if first.kind == TokenKind.keyword_icon:
         return [TeleportKind.friend_icon]
 
-    # A single word may be a variable holding the real name, so leave it for the VM to resolve.
+    # Single word may be a variable. Leave it for the VM.
     if parser.tokens[parser.pos].kind == TokenKind.END_LINE:
         return [TeleportKind.friend_name, IdentExpression(first.literal)]
 

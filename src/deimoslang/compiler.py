@@ -989,7 +989,7 @@ class Compiler:
         match stmt:
             case VariableDeclStmt():
                 self.prep_expression(stmt.value)
-                self.emit(InstructionKind.declare_variable, [stmt.name, stmt.value])
+                self.emit(InstructionKind.declare_variable, [stmt.name, stmt.value, stmt.constant])
 
             case TimerStmt():
                 match stmt.action:
