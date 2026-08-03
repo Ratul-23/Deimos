@@ -259,15 +259,15 @@ class Expression:
     """Base for anything with a value."""
 
 
-class ConstantExpression(Expression):
-    """A named constant paired with its value."""
+class BooleanExpression(Expression):
+    """A `true` or `false` written out."""
 
     def __init__(self, name: str, value: Expression) -> None:
         self.name: str = name
         self.value: Expression = value
 
     def __repr__(self) -> str:
-        return f"ConstE({self.name}, {self.value})"
+        return f"Bool({self.name})"
 
 
 class ListExpression(Expression):
@@ -455,25 +455,25 @@ class OrExpression(Expression):
         return f"OrE({', '.join(str(expr) for expr in self.expressions)})"
 
 
-class ConstantReferenceExpression(Expression):
-    """A `$name` reference to a constant."""
+class VariableReferenceExpression(Expression):
+    """A `$name` reference to a variable."""
 
     def __init__(self, name: str) -> None:
         self.name: str = name
 
     def __repr__(self) -> str:
-        return f"ConstRef(${self.name})"
+        return f"VarRef(${self.name})"
 
 
-class ConstantCheckExpression(Expression):
-    """A `name = value` test against a constant."""
+class VariableCheckExpression(Expression):
+    """A `name = value` test."""
 
     def __init__(self, name: str, value: Expression) -> None:
         self.name: str = name
         self.value: Expression = value
 
     def __repr__(self) -> str:
-        return f"ConstCheck({self.name}, {self.value})"
+        return f"VarCheck({self.name}, {self.value})"
 
 
 class RangeMinExpression(Expression):
@@ -578,8 +578,8 @@ _EXPRESSION_NAMES: dict[type[Expression], str] = {
     NumberExpression: "a number",
     ListExpression: "a list",
     XYZExpression: "a position",
-    ConstantExpression: "a boolean",
-    ConstantReferenceExpression: "a constant",
+    BooleanExpression: "a boolean",
+    VariableReferenceExpression: "a variable",
     IdentExpression: "a name",
     KeyExpression: "a key",
     Eval: "a stat",
@@ -600,7 +600,7 @@ _CONDITIONS: tuple[type[Expression], ...] = (
     SelectorGroup,
     AndExpression,
     OrExpression,
-    ConstantCheckExpression,
+    VariableCheckExpression,
     EquivalentExpression,
     GreaterExpression,
     GreaterEqualExpression,
@@ -664,7 +664,7 @@ class Stmt:
     line_info: LineInfo | None = None
 
 
-class ConstantDeclStmt(Stmt):
+class VariableDeclStmt(Stmt):
     """A `con name = value` declaration."""
 
     def __init__(self, name: str, value: Expression) -> None:
@@ -672,7 +672,7 @@ class ConstantDeclStmt(Stmt):
         self.value: Expression = value
 
     def __repr__(self) -> str:
-        return f"ConstDeclS({self.name}, {self.value})"
+        return f"VarDeclS({self.name}, {self.value})"
 
 
 class StmtList(Stmt):
@@ -880,8 +880,8 @@ class VMError(LocatedError):
     """An instruction cannot be carried out."""
 
 
-class UnknownConstantError(VMError):
-    """Raised when a `$name` stands for nothing, which waiting will not fix."""
+class UnknownNameError(VMError):
+    """A name stands for nothing."""
 
 
 class InstructionKind(Enum):
@@ -927,7 +927,7 @@ class InstructionKind(Enum):
     end_counter = auto()
     change_counter = auto()
 
-    declare_constant = auto()
+    declare_variable = auto()
 
     nop = auto()
 

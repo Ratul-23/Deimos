@@ -12,7 +12,6 @@ from ..ast import (
     AddExpression,
     ClickKind,
     CommandKind,
-    ConstantReferenceExpression,
     CursorKind,
     DivideExpression,
     Eval,
@@ -29,6 +28,7 @@ from ..ast import (
     StringExpression,
     SubExpression,
     TeleportKind,
+    VariableReferenceExpression,
     WaitforKind,
     XYZExpression,
     describe_expression,
@@ -126,7 +126,7 @@ def _looks_like_xyz(parser: Parser) -> bool:
 
 
 def _starts_window_path(parser: Parser, pos: int) -> bool:
-    """Whether a [bracketed] path or a $constant naming one begins at `pos`."""
+    """Whether a window path begins at `pos`."""
     if pos >= len(parser.tokens):
         return False
 
@@ -135,7 +135,7 @@ def _starts_window_path(parser: Parser, pos: int) -> bool:
 
 
 def _starts_position(parser: Parser) -> bool:
-    """Whether an `XYZ(...)` or a $constant naming one begins at the next token."""
+    """Whether a position begins next."""
     if parser.pos >= len(parser.tokens):
         return False
 
@@ -259,7 +259,7 @@ def first_of(
 
 
 def _scalar(parser: Parser) -> Expression | None:
-    """Parse a number or a constant name, or nothing if neither is next."""
+    """Parse a number or a name."""
     kind: TokenKind = parser.tokens[parser.pos].kind
 
     if kind == TokenKind.number:
@@ -313,7 +313,7 @@ def key_with_optional_expression(parser: Parser) -> list[Any]:
     key: KeyExpression = parser.parse_key()
 
     # The game names its keys, so a wrong one is worth catching here rather than mid-run. A $name says
-    # the key comes from a constant, which only the VM can look up.
+    # the key comes from a variable, which only the VM can look up.
     if not key.key.startswith("$") and key.key not in Keycode.__members__:
         parser.err(parser.tokens[parser.pos - 1], f"Unknown key: {key.key}")
 
@@ -330,7 +330,7 @@ def key_with_optional_expression(parser: Parser) -> list[Any]:
 
 def greedy_name(parser: Parser) -> list[Any]:
     """Parse the line as one name."""
-    # A lone identifier is already the whole name and may be a $constant, so keep it intact.
+    # Lone identifier is the whole name, maybe a $variable. Keep intact.
     if (
         parser.tokens[parser.pos].kind == TokenKind.identifier
         and parser.pos + 1 < len(parser.tokens)
@@ -361,7 +361,7 @@ class _LogValue:
     reads: tuple[EvalKind, ...]
     takes_window_path: bool = False
     takes_name: bool = False
-    is_constant: bool = False
+    is_variable: bool = False
 
 
 _LOG_VALUES: dict[TokenKind, _LogValue] = {
@@ -402,7 +402,7 @@ def _read_log_value_kind(parser: Parser, pos: int) -> _LogValue | None:
             return _LOG_VALUES[TokenKind.command_expr_window_text]
 
         if token.literal.startswith("$"):
-            return _LogValue(LogKind.single, token.literal[1:], "%s", (), is_constant=True)
+            return _LogValue(LogKind.single, token.literal[1:], "%s", (), is_variable=True)
 
         return None
 
@@ -418,8 +418,8 @@ def _read_log_value(parser: Parser) -> tuple[_LogValue, list[Expression]] | None
 
     parser.pos += 1
 
-    if value.is_constant:
-        return value, [ConstantReferenceExpression(value.label)]
+    if value.is_variable:
+        return value, [VariableReferenceExpression(value.label)]
 
     if value.takes_window_path:
         window_path: list[str] | Expression = parser.parse_window_path()
@@ -478,7 +478,7 @@ def parse_log(parser: Parser) -> list[Any]:
         value, reads = values[0]
 
         # Keeps its old `name = value` shape.
-        if value.is_constant:
+        if value.is_variable:
             return [value.kind, IdentExpression(value.label)]
 
         return [value.kind, StrFormatExpression(f"{value.label}: {value.template}", *reads)]
@@ -515,7 +515,7 @@ def parse_friend_teleport(parser: Parser) -> list[Any]:
     if first.kind == TokenKind.keyword_icon:
         return [TeleportKind.friend_icon]
 
-    # A single word may be a constant holding the real name, so leave it for the VM to resolve.
+    # A single word may be a variable holding the real name, so leave it for the VM to resolve.
     if parser.tokens[parser.pos].kind == TokenKind.END_LINE:
         return [TeleportKind.friend_name, IdentExpression(first.literal)]
 
@@ -609,7 +609,7 @@ command(
 )
 
 
-# Commands taking one literal that a constant or expression may stand in for.
+# Take one literal a variable may stand in for.
 command(
     TokenKind.command_tozone,
     CommandKind.tozone,

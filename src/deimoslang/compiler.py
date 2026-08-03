@@ -8,16 +8,13 @@ from .ast import (
     AndExpression,
     BinaryExpression,
     BlockDefStmt,
+    BooleanExpression,
     BreakStmt,
     CallStmt,
     Command,
     CommandExpression,
     CommandKind,
     CommandStmt,
-    ConstantCheckExpression,
-    ConstantDeclStmt,
-    ConstantExpression,
-    ConstantReferenceExpression,
     CounterAction,
     CounterStmt,
     DefVarStmt,
@@ -58,6 +55,9 @@ from .ast import (
     UnaryOp,
     UntilRegion,
     UntilStmt,
+    VariableCheckExpression,
+    VariableDeclStmt,
+    VariableReferenceExpression,
     WhileStmt,
     WholeNumberExpression,
     WriteVarStmt,
@@ -347,7 +347,7 @@ class Analyzer:
             case TimerStmt() | CounterStmt():
                 return stmt
 
-            case ConstantDeclStmt():
+            case VariableDeclStmt():
                 return stmt
 
             case BlockDefStmt():
@@ -900,7 +900,7 @@ class Compiler:
     def prep_expression(self, expr: Expression) -> None:
         """Rewrite an expression for the VM."""
         match expr:
-            case ConstantCheckExpression():
+            case VariableCheckExpression():
                 self.prep_expression(expr.value)
 
             case AndExpression() | OrExpression():
@@ -951,8 +951,8 @@ class Compiler:
                 self.check_cross_client_selector(expr)
 
             case (
-                ConstantExpression()
-                | ConstantReferenceExpression()
+                BooleanExpression()
+                | VariableReferenceExpression()
                 | NumberExpression()
                 | StringExpression()
                 | KeyExpression()
@@ -987,9 +987,9 @@ class Compiler:
     def _compile_inner(self, stmt: Stmt) -> None:
         """Emit code for one statement."""
         match stmt:
-            case ConstantDeclStmt():
+            case VariableDeclStmt():
                 self.prep_expression(stmt.value)
-                self.emit(InstructionKind.declare_constant, [stmt.name, stmt.value])
+                self.emit(InstructionKind.declare_variable, [stmt.name, stmt.value])
 
             case TimerStmt():
                 match stmt.action:

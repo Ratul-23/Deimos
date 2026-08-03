@@ -27,11 +27,9 @@ from ..utils import (
 from .ast import (
     AddExpression,
     AndExpression,
+    BooleanExpression,
     CommandExpression,
     CommandKind,
-    ConstantCheckExpression,
-    ConstantExpression,
-    ConstantReferenceExpression,
     ContainsStringExpression,
     DivideExpression,
     EquivalentExpression,
@@ -61,7 +59,9 @@ from .ast import (
     SubExpression,
     UnaryExpression,
     UnaryOp,
-    UnknownConstantError,
+    UnknownNameError,
+    VariableCheckExpression,
+    VariableReferenceExpression,
     VMError,
     WholeNumberExpression,
     XYZExpression,
@@ -214,7 +214,7 @@ class VM:
         self.logged_data: dict[str, dict[str, str | None]] = {"goal": {}, "quest": {}, "zone": {}}
 
         # True and False are defined up front so `$True` and `$False` resolve without being declared.
-        self._constants: dict[str, Any] = {
+        self._variables: dict[str, Any] = {
             "True": True,
             "False": False,
         }
@@ -238,7 +238,7 @@ class VM:
         self._counters = {}
         self._any_player_client = []
         self._call_scopes = []
-        self._constants = {
+        self._variables = {
             "True": True,
             "False": False,
         }
@@ -253,9 +253,9 @@ class VM:
         self.stop()
         self.killed = True
 
-    async def define_constant(self, name: str, value: Any) -> None:
-        """Set a constant to whatever was written, without reading anything into it."""
-        self._constants[name] = value
+    async def define_variable(self, name: str, value: Any) -> None:
+        """Set a variable to whatever was written, without reading anything into it."""
+        self._variables[name] = value
 
     def load_from_text(self, code: str, filename: str | None = None) -> None:
         """Compile source text into a program."""
@@ -487,18 +487,18 @@ class VM:
 
         return False
 
-    def _named_constant(self, text: str) -> Any:
+    def _named_variable(self, text: str) -> Any:
         """What a `$name` stands for."""
-        const_name: str = text[1:]
+        name: str = text[1:]
 
-        if const_name in self._constants:
-            return self._constants[const_name]
+        if name in self._variables:
+            return self._variables[name]
 
-        raise UnknownConstantError(f"Unknown constant: ${const_name}")
+        raise UnknownNameError(f"Unknown name: ${name}")
 
-    def _written_constant(self, text: str) -> Any:
-        """What spelled-out text stands for, kept as written when no constant has that name."""
-        return self._constants.get(text[1:], text) if text.startswith("$") else text
+    def _written_variable(self, text: str) -> Any:
+        """What written-out text stands for."""
+        return self._variables.get(text[1:], text) if text.startswith("$") else text
 
     async def _extract_data_info(self, data: Any) -> Any:
         """Resolve an argument to a value."""
@@ -508,21 +508,21 @@ class VM:
 
         # A name arrives as an expression. Text here may just start with a $.
         if isinstance(data, str):
-            return self._written_constant(data)
+            return self._written_variable(data)
 
         elif isinstance(data, StringExpression):
-            return self._written_constant(data.string)
+            return self._written_variable(data.string)
 
         elif isinstance(data, IdentExpression):
             ident: str = data.ident
 
             if ident.startswith("$"):
-                return self._named_constant(ident)
+                return self._named_variable(ident)
 
-            elif ident in self._constants:
-                return self._constants[ident]
+            elif ident in self._variables:
+                return self._variables[ident]
 
-            # Not a constant, so the identifier is treated as something to evaluate.
+            # Not a variable. Treat the name as something to evaluate.
             else:
                 try:
                     return await self.eval(data)
@@ -602,8 +602,8 @@ class VM:
     async def _eval_operand(self, side: Expression, client: Client | None) -> Any:
         """A value that must be a number."""
         # A name nothing was declared under reads as the word itself, which is never the number wanted.
-        if isinstance(side, IdentExpression) and side.ident not in self._constants:
-            raise UnknownConstantError(f"Unknown constant: {side.ident}")
+        if isinstance(side, IdentExpression) and side.ident not in self._variables:
+            raise UnknownNameError(f"Unknown name: {side.ident}")
 
         return await self.eval(side, client)
 
@@ -611,34 +611,34 @@ class VM:
         """Evaluate an expression, maybe per client."""
         match expression:
             case IdentExpression():
-                if expression.ident in self._constants:
-                    return self._constants[expression.ident]
+                if expression.ident in self._variables:
+                    return self._variables[expression.ident]
 
                 return expression.ident
 
-            case ConstantReferenceExpression():
-                if expression.name in self._constants:
-                    return self._constants[expression.name]
+            case VariableReferenceExpression():
+                if expression.name in self._variables:
+                    return self._variables[expression.name]
 
-                raise UnknownConstantError(f"Unknown constant: ${expression.name}")
+                raise UnknownNameError(f"Unknown name: ${expression.name}")
 
-            case ConstantExpression():
-                # `true` and `false` are spelled as text, but a constant declared from one holds a boolean.
+            case BooleanExpression():
+                # `true` and `false` are spelled as text, but a variable declared from one holds a boolean.
                 return _as_bool(await self.eval(expression.value, client))
 
-            case ConstantCheckExpression():
-                constant_name: str = expression.name
+            case VariableCheckExpression():
+                variable_name: str = expression.name
                 expected_value: Any = await self.eval(expression.value)
 
-                if constant_name in self._constants:
-                    actual_value: Any = self._constants[constant_name]
+                if variable_name in self._variables:
+                    actual_value: Any = self._variables[variable_name]
 
                     if isinstance(expected_value, bool) != isinstance(actual_value, bool):
                         return _as_bool(actual_value) == _as_bool(expected_value)
 
                     return actual_value == expected_value
 
-                raise UnknownConstantError(f"Unknown constant: {constant_name}")
+                raise UnknownNameError(f"Unknown name: {variable_name}")
 
             case RangeMinExpression():
                 return await self._eval_range_end(expression.range_expr, 0, client)
@@ -763,9 +763,9 @@ class VM:
             case KeyExpression():
                 key: str = expression.key
 
-                # A name that is not a key itself may be a constant naming one, read only where a key is wanted.
+                # A name that is not a key itself may be a variable naming one, read only where a key is wanted.
                 if key not in Keycode.__members__:
-                    held: Any = self._constants.get(key.removeprefix("$"))
+                    held: Any = self._variables.get(key.removeprefix("$"))
 
                     if isinstance(held, str) and held in Keycode.__members__:
                         return Keycode[held]
@@ -962,14 +962,14 @@ class VM:
                 # A $name must stand for something. A bare name may be what was meant.
                 if isinstance(arg, IdentExpression):
                     if arg.ident.startswith("$"):
-                        return self._named_constant(arg.ident)
+                        return self._named_variable(arg.ident)
 
-                    return self._constants.get(arg.ident, arg.ident)
+                    return self._variables.get(arg.ident, arg.ident)
 
                 return await self.eval(arg, client)
 
             elif isinstance(arg, str):
-                return self._written_constant(arg)
+                return self._written_variable(arg)
 
             return arg
 
@@ -1016,7 +1016,7 @@ class VM:
                         self.current_task.ip = info.exit_point
                         return
 
-                except UnknownConstantError:
+                except UnknownNameError:
                     raise
 
                 except VMError as error:
@@ -1077,10 +1077,10 @@ class VM:
                 self.current_task.ip = 0
                 logger.debug("Bot Restarted")
 
-            case InstructionKind.declare_constant:
+            case InstructionKind.declare_variable:
                 name, expr = instruction.data
                 value: Any = await self.eval(expr)
-                await self.define_constant(name, value)
+                await self.define_variable(name, value)
                 self.current_task.ip += 1
 
             case InstructionKind.start_timer:
@@ -1173,7 +1173,7 @@ class VM:
                         self.current_task.ip += 1
 
                 # A name standing for nothing is a script mistake. Carrying on would guess.
-                except UnknownConstantError:
+                except UnknownNameError:
                     raise
 
                 # An unreadable condition takes the forward branch. The bot never stalls.
@@ -1196,7 +1196,7 @@ class VM:
                     else:
                         self.current_task.ip += instruction.data[1]
 
-                except UnknownConstantError:
+                except UnknownNameError:
                     raise
 
                 except VMError as error:

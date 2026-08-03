@@ -178,7 +178,7 @@ async def _tp_to_entity(ctx: ExecContext, tg: asyncio.TaskGroup, vague: bool) ->
     """Teleport to the closest named entity."""
     use_navmap: bool = TeleportKind.nav in ctx.args
 
-    # The parser always hands over a string, but a constant standing in for it may hold anything.
+    # The parser always hands over a string, but a variable standing in for it may hold anything.
     name: str = str(await ctx.eval_arg(ctx.args[-2], ctx.clients[0]))
 
     # Read up front. Bad position errors even with no entity nearby.
@@ -233,7 +233,7 @@ async def _tp_to_friend_icon(ctx: ExecContext, tg: asyncio.TaskGroup) -> None:
 
 async def _tp_to_friend_name(ctx: ExecContext, tg: asyncio.TaskGroup) -> None:
     """Teleport to a friend by name."""
-    # A constant standing in for the name may hold anything, so settle it on a string.
+    # Variable may hold anything. Settle it on a string.
     friend_name: str = str(await ctx.eval_arg(ctx.args[-1], ctx.clients[0]))
 
     async def tp_to_named_friend(client: SprintyClient) -> None:
@@ -488,7 +488,7 @@ async def tozone(ctx: ExecContext) -> None:
 @handler(CommandKind.select_friend)
 async def select_friend(ctx: ExecContext) -> None:
     """Pick a friend by name."""
-    # The parser always hands over a string, but a constant standing in for the name may hold anything.
+    # The parser always hands over a string, but a variable standing in for the name may hold anything.
     friend_name: str = str(await ctx.eval_arg(ctx.args[0], ctx.clients[0]))
 
     async with asyncio.TaskGroup() as tg:
@@ -615,14 +615,14 @@ async def instr_sleep(ctx: InstructionContext) -> None:
 
 @instruction_handler("log_single")
 async def instr_log_single(ctx: InstructionContext) -> None:
-    """Log one value, resolving a bare identifier as a constant."""
+    """Log one value."""
     assert isinstance(ctx.instruction.data, Expression)
 
     if isinstance(ctx.instruction.data, IdentExpression):
         ident: str = ctx.instruction.data.ident
 
-        if ident in ctx.vm._constants:
-            logger.debug(f"{ident} = {ctx.vm._constants[ident]}")
+        if ident in ctx.vm._variables:
+            logger.debug(f"{ident} = {ctx.vm._variables[ident]}")
         else:
             logger.debug(ident)
 
@@ -652,7 +652,7 @@ async def instr_load_playstyle(ctx: InstructionContext) -> None:
     """Spread a playstyle across clients."""
     logger.debug("Loading playstyle")
 
-    # A playstyle may be written as a string, a constant or an expression, so resolve it before splitting it.
+    # A playstyle may be written as a string, a variable or an expression, so resolve it before splitting it.
     playstyle: str = str(await ctx.vm._extract_data_info(ctx.instruction.data))
     delegated: dict[int, str] = delegate_combat_configs(playstyle, len(ctx.vm._clients))
     logger.debug(delegated)
@@ -685,7 +685,7 @@ async def instr_set_yaw(ctx: InstructionContext) -> None:
     assert isinstance(ctx.instruction.data, list)
     selector: PlayerSelector = ctx.instruction.data[0]
 
-    # A heading may be written as a number, a constant or an expression, so resolve it before writing memory.
+    # A heading may be written as a number, a variable or an expression, so resolve it before writing memory.
     yaw: float = _as_number(await ctx.vm._extract_data_info(ctx.instruction.data[1]))
 
     clients: list[SprintyClient] = ctx.vm._command_players(selector)

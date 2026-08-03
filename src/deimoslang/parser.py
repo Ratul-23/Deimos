@@ -11,15 +11,12 @@ from .ast import (
     AndExpression,
     BinaryExpression,
     BlockDefStmt,
+    BooleanExpression,
     BreakStmt,
     CallStmt,
     Command,
     CommandExpression,
     CommandStmt,
-    ConstantCheckExpression,
-    ConstantDeclStmt,
-    ConstantExpression,
-    ConstantReferenceExpression,
     CounterAction,
     CounterStmt,
     DivideExpression,
@@ -56,6 +53,9 @@ from .ast import (
     UnaryExpression,
     UnaryOp,
     UntilStmt,
+    VariableCheckExpression,
+    VariableDeclStmt,
+    VariableReferenceExpression,
     WhileStmt,
     XYZExpression,
     asks_any_player,
@@ -171,7 +171,7 @@ _WRITTEN_VALUES: tuple[type[Expression], ...] = (
     StringExpression,
     ListExpression,
     XYZExpression,
-    ConstantExpression,
+    BooleanExpression,
 )
 
 
@@ -361,25 +361,25 @@ class Parser:
             self.expect_consume(TokenKind.paren_close)
             return grouped
 
-        # A $name reads the constant's value, while a bare name is used as written.
+        # A $name reads the variable. A bare name is used as written.
         if (
             self.pos < len(self.tokens)
             and self.tokens[self.pos].kind == TokenKind.identifier
             and self.tokens[self.pos].literal.startswith("$")
         ):
-            constant_name: str = self.tokens[self.pos].literal[1:]
+            variable_name: str = self.tokens[self.pos].literal[1:]
             self.pos += 1
-            return ConstantReferenceExpression(constant_name)
+            return VariableReferenceExpression(variable_name)
 
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.boolean_true:
             token: Token = self.tokens[self.pos]
             self.pos += 1
-            return ConstantExpression(token.literal, StringExpression("true"))
+            return BooleanExpression(token.literal, StringExpression("true"))
 
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.boolean_false:
             token: Token = self.tokens[self.pos]
             self.pos += 1
-            return ConstantExpression(token.literal, StringExpression("false"))
+            return BooleanExpression(token.literal, StringExpression("false"))
 
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.square_open:
             return self.parse_list()
@@ -492,7 +492,7 @@ class Parser:
         if expected_types is None:
             expected_types = [TokenKind.number, TokenKind.string, TokenKind.percent, TokenKind.identifier]
 
-        # A window path may arrive as an identifier, since a constant can hold the whole path.
+        # A window path may arrive as an identifier. A variable can hold it whole.
         if (
             (TokenKind.identifier in expected_types or "window_path" in expected_types)
             and self.pos < len(self.tokens)
@@ -502,7 +502,7 @@ class Parser:
             self.pos += 1
 
             if ident.startswith("$"):
-                return ConstantReferenceExpression(ident[1:])
+                return VariableReferenceExpression(ident[1:])
 
             return IdentExpression(ident)
 
@@ -821,37 +821,37 @@ class Parser:
                     "A player selector cannot cover a group. Write it on each check inside instead",
                 )
 
-        # An identifier followed by = tests a constant's value rather than naming a command.
+        # An identifier followed by = tests a variable, not a command.
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.identifier:
             ident: str = self.tokens[self.pos].literal
             self.pos += 1
 
             if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.equals:
                 if negation is not None:
-                    self.err(negation, f"Write `not {ident} = ...` instead, since a constant has no client to ask")
+                    self.err(negation, f"Write `not {ident} = ...` instead, since a variable has no client to ask")
 
                 self.pos += 1
 
-                # `$x` and `x` name the same constant, so the $ would look one up that was never declared.
+                # `$x` and `x` name the same variable, so the $ would look one up that was never declared.
                 checked: str = ident.removeprefix("$")
 
                 if self.pos < len(self.tokens):
                     if self.tokens[self.pos].kind == TokenKind.boolean_true:
                         token: Token = self.tokens[self.pos]
                         self.pos += 1
-                        return ConstantCheckExpression(
-                            checked, ConstantExpression(token.literal, StringExpression("true"))
+                        return VariableCheckExpression(
+                            checked, BooleanExpression(token.literal, StringExpression("true"))
                         )
 
                     elif self.tokens[self.pos].kind == TokenKind.boolean_false:
                         token: Token = self.tokens[self.pos]
                         self.pos += 1
-                        return ConstantCheckExpression(
-                            checked, ConstantExpression(token.literal, StringExpression("false"))
+                        return VariableCheckExpression(
+                            checked, BooleanExpression(token.literal, StringExpression("false"))
                         )
 
                 value: Expression = self.parse_expression()
-                return ConstantCheckExpression(checked, value)
+                return VariableCheckExpression(checked, value)
 
             # No = followed. Give the identifier back to the rest of this method.
             else:
@@ -1227,8 +1227,8 @@ class Parser:
         return ListExpression(items)
 
     def parse_window_path(self) -> list[str] | Expression:
-        """Parse a window path, either a list or a constant reference."""
-        # A $constant may hold the whole path, so the VM resolves it instead of the parser.
+        """Parse a window path."""
+        # A $variable may hold the whole path. The VM resolves it, not the parser.
         if (
             self.pos < len(self.tokens)
             and self.tokens[self.pos].kind == TokenKind.identifier
@@ -1236,7 +1236,7 @@ class Parser:
         ):
             ident: str = self.tokens[self.pos].literal
             self.pos += 1
-            return ConstantReferenceExpression(ident[1:])
+            return VariableReferenceExpression(ident[1:])
 
         list_expr: ListExpression = self.parse_list()
         result: list[str] = []
@@ -1339,12 +1339,12 @@ class Parser:
             case TokenKind.keyword_con:
                 self.pos += 1
 
-                # Every other name in the language may be spelled with a keyword, so a constant may too.
+                # Every other name may be spelled with a keyword. A variable may too.
                 var_name: str = self.consume_any_ident().ident
                 self.expect_consume(TokenKind.equals)
                 expr: Expression = self.parse_expression()
                 self.end_line()
-                return ConstantDeclStmt(var_name, expr)
+                return VariableDeclStmt(var_name, expr)
 
             case TokenKind.keyword_starttimer | TokenKind.keyword_resettimer | TokenKind.keyword_endtimer:
                 timer_action: TimerAction = _TIMER_ACTIONS[self.tokens[self.pos].kind]
