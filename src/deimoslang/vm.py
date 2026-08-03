@@ -3,6 +3,7 @@
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
+from math import isfinite
 from typing import Any
 
 from loguru import logger
@@ -61,6 +62,7 @@ from .ast import (
     UnaryExpression,
     UnaryOp,
     VMError,
+    WholeNumberExpression,
     XYZExpression,
     asks_any_player,
 )
@@ -74,6 +76,9 @@ from .compiler import Compiler
 from .lexer import LineInfo
 
 MAX_STACK_DEPTH: int = 1024
+
+# Wider than a float is more than a bot could count through.
+MAX_COUNT_BITS: int = 1024
 
 
 class Task:
@@ -145,6 +150,15 @@ def _as_number(value: Any, expression: Expression) -> float:
         raise VMError(f"Expected a number in {expression}, got {value!r}")
 
     return value
+
+
+def _as_coordinate(value: Any, expression: Expression) -> float:
+    """One part of a position, widened."""
+    try:
+        return float(_as_number(value, expression))
+
+    except OverflowError:
+        raise VMError(f"Number too big for a position in {expression}") from None
 
 
 def _as_bool(value: Any) -> Any:
@@ -635,10 +649,11 @@ class VM:
                 return expression.number
 
             case XYZExpression():
+                # A name may stand in for a coordinate. Only a number is a place.
                 return XYZ(
-                    await self.eval(expression.x, client),
-                    await self.eval(expression.y, client),
-                    await self.eval(expression.z, client),
+                    _as_coordinate(await self.eval(expression.x, client), expression),
+                    _as_coordinate(await self.eval(expression.y, client), expression),
+                    _as_coordinate(await self.eval(expression.z, client), expression),
                 )
 
             case UnaryExpression():
@@ -727,6 +742,21 @@ class VM:
 
                 return left / right
 
+            case WholeNumberExpression():
+                counted: float = _as_number(await self.eval(expression.expr, client), expression)
+
+                # Already whole. Too big to weigh cannot be asked if it is finite.
+                if isinstance(counted, int):
+                    if counted.bit_length() > MAX_COUNT_BITS:
+                        raise VMError(f"Too many repetitions to run: {counted}")
+
+                    return counted
+
+                if not isfinite(counted) or counted != int(counted):
+                    raise VMError(f"Expected a whole number of repetitions, got {counted}")
+
+                return int(counted)
+
             case GreaterExpression() | GreaterEqualExpression():
                 left: Any = await self.eval(expression.lhs, client)
                 right: Any = await self.eval(expression.rhs, client)
@@ -737,10 +767,15 @@ class VM:
                 if isinstance(right, list) and len(right) > 0:
                     right = right[0]
 
-                if isinstance(expression, GreaterEqualExpression):
-                    return left >= right
+                # Two kinds that do not line up. A script mistake, not a crash.
+                try:
+                    if isinstance(expression, GreaterEqualExpression):
+                        return left >= right
 
-                return left > right
+                    return left > right
+
+                except TypeError:
+                    raise VMError(f"Cannot compare {left!r} with {right!r} in {expression}") from None
 
             case Eval():
                 return await self._eval_expression(expression, client)
@@ -826,7 +861,7 @@ class VM:
         if isinstance(range_value, list) and len(range_value) == 2:
             try:
                 return float(range_value[index])
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 raise VMError(f"Invalid range end: {range_value[index]}. Expected a number") from None
 
         raise VMError(f"Range must be a string like '1-100' or a two item list, got {range_value}")

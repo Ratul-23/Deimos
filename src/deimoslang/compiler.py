@@ -59,6 +59,7 @@ from .ast import (
     UntilRegion,
     UntilStmt,
     WhileStmt,
+    WholeNumberExpression,
     WriteVarStmt,
     XYZExpression,
 )
@@ -483,7 +484,7 @@ class Analyzer:
                 var_sym: Symbol = self.def_var()
                 prologue: list[Stmt] = [
                     DefVarStmt(var_sym),
-                    WriteVarStmt(var_sym, NumberExpression(stmt.num)),
+                    WriteVarStmt(var_sym, WholeNumberExpression(stmt.count)),
                 ]
                 epilogue: list[Stmt] = [
                     KillVarStmt(var_sym),
@@ -925,7 +926,7 @@ class Compiler:
                 else:
                     raise CompilerError(f"Malformed ReadVarExpr: {expr}")
 
-            case SelectorGroup() | UnaryExpression():
+            case SelectorGroup() | UnaryExpression() | WholeNumberExpression():
                 self.prep_expression(expr.expr)
 
             case ListExpression():

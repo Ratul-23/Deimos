@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from math import isfinite
 from typing import NoReturn
 
 from .ast import (
@@ -87,6 +88,16 @@ def _written(token: Token) -> str:
     return f"`{first_line}`" if first_line == token.literal else f"`{first_line}...`"
 
 
+def _reads_as_number(text: str) -> bool:
+    """Whether text spells a number."""
+    try:
+        float(text)
+        return True
+
+    except ValueError:
+        return False
+
+
 def _joined_parts(expr: Expression, joiner: type[AndExpression] | type[OrExpression]) -> list[Expression]:
     """An `and` or `or`'s operands, flattened."""
     if not isinstance(expr, joiner):
@@ -148,6 +159,20 @@ _COUNTER_ACTIONS: dict[TokenKind, CounterAction] = {
     TokenKind.keyword_addone: CounterAction.add,
     TokenKind.keyword_minusone: CounterAction.subtract,
 }
+
+# Taken by name, so both count as numbers wherever a number fits.
+_NAMED_NUMBERS: dict[TokenKind, EvalKind] = {
+    TokenKind.command_expr_counter: EvalKind.counter,
+    TokenKind.command_expr_timer: EvalKind.timer,
+}
+
+_WRITTEN_VALUES: tuple[type[Expression], ...] = (
+    NumberExpression,
+    StringExpression,
+    ListExpression,
+    XYZExpression,
+    ConstantExpression,
+)
 
 
 class Parser:
@@ -225,7 +250,7 @@ class Parser:
 
     def parse_numeric_comparison(self, evaluated: Expression, player_selector: PlayerSelector) -> Expression:
         """Parse a comparison against a value."""
-        # A number may be worked on first, as in `counter runs % 10 == 0`.
+        # A value may be worked on first, as in `windownum ["a"] % 10 == 0`.
         worked_on: int = self.pos
         evaluated = self.parse_additive_expression(evaluated)
         calculated: bool = self.pos > worked_on
@@ -233,33 +258,16 @@ class Parser:
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind in _COMPARISONS:
             operator: Token = self.tokens[self.pos]
             self.pos += 1
-            target: Expression = self.parse_expression()
+
+            # Only the number, so a following `and` still joins whole conditions.
+            target: Expression = self.parse_additive_expression()
             return self._gen_comparison(operator, evaluated, target, player_selector)
 
         elif self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.keyword_isbetween:
             self.pos += 1
+            min_value, max_value, _ = self._parse_between_bounds()
 
-            # The bounds come either from a named range or from a "min-max" string.
-            if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.identifier:
-                return self.gen_named_range_check(evaluated, player_selector)
-
-            else:
-                range_str: str = self.expect_consume(TokenKind.string).value
-
-                try:
-                    min_val, max_val = map(float, range_str.split("-"))
-                    min_expr: Expression = self.gen_greater_equal_expression(
-                        evaluated, NumberExpression(min_val), player_selector
-                    )
-                    max_expr: Expression = self.gen_greater_equal_expression(
-                        NumberExpression(max_val), evaluated, player_selector
-                    )
-                    return AndExpression([min_expr, max_expr])
-
-                except ValueError:
-                    self.err(
-                        self.tokens[self.pos - 1], f"Invalid range format: {range_str}. Expected format like '1-100'"
-                    )
+            return self._gen_between(evaluated, min_value, max_value, player_selector)
 
         # A calculation only reads as a number. Never the condition.
         if calculated:
@@ -267,6 +275,33 @@ class Parser:
 
         # Nothing to compare against. The value is the condition.
         return SelectorGroup(player_selector, evaluated)
+
+    def parse_named_number(self, kind: EvalKind, player_selector: PlayerSelector) -> Expression:
+        """Parse a named number and its use."""
+        self.pos += 1
+        name: IdentExpression = self.consume_any_ident()
+
+        # A number may be worked on first, as in `counter runs % 10 == 0`.
+        evaluated: Expression = self.parse_additive_expression(Eval(kind, [StringExpression(name.ident)]))
+
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind in _COMPARISONS:
+            operator: Token = self.tokens[self.pos]
+            self.pos += 1
+
+            # Only the number, so a following `and` still joins whole conditions.
+            return self._gen_comparison(operator, evaluated, self.parse_additive_expression(), player_selector)
+
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.keyword_isbetween:
+            self.pos += 1
+            min_value, max_value, _ = self._parse_between_bounds()
+
+            return self._gen_between(evaluated, min_value, max_value, player_selector)
+
+        # A selector or `not` still needs answering. Only a bare one is a number.
+        if not player_selector.implicit or player_selector.negated:
+            return SelectorGroup(player_selector, evaluated)
+
+        return evaluated
 
     def parse_indexed_numeric_comparison(self, evaluated: Expression, player_selector: PlayerSelector) -> Expression:
         """Compare each number in a window."""
@@ -291,28 +326,8 @@ class Parser:
 
                 elif self.tokens[self.pos].kind == TokenKind.keyword_isbetween:
                     self.pos += 1
-
-                    if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.identifier:
-                        expressions.append(self.gen_named_range_check(indexed_eval, player_selector))
-
-                    else:
-                        range_str: str = self.expect_consume(TokenKind.string).value
-
-                        try:
-                            min_val, max_val = map(float, range_str.split("-"))
-                            min_expr: Expression = self.gen_greater_equal_expression(
-                                indexed_eval, NumberExpression(min_val), player_selector
-                            )
-                            max_expr: Expression = self.gen_greater_equal_expression(
-                                NumberExpression(max_val), indexed_eval, player_selector
-                            )
-                            expressions.append(AndExpression([min_expr, max_expr]))
-
-                        except ValueError:
-                            self.err(
-                                self.tokens[self.pos - 1],
-                                f"Invalid range format: {range_str}. Expected format like '1-100'",
-                            )
+                    min_value, max_value, _ = self._parse_between_bounds()
+                    expressions.append(self._gen_between(indexed_eval, min_value, max_value, player_selector))
 
                 else:
                     expressions.append(
@@ -336,24 +351,6 @@ class Parser:
 
         # Without brackets the check applies to the first number in the text.
         return self.parse_numeric_comparison(IndexAccessExpression(evaluated, NumberExpression(0)), player_selector)
-
-    def gen_named_range_check(self, evaluated: Expression, player_selector: PlayerSelector) -> Expression:
-        """Consume a range name and build an inclusive check of a value against it."""
-        literal: str = self.tokens[self.pos].literal
-        self.pos += 1
-
-        range_expr: Expression = (
-            ConstantReferenceExpression(literal[1:]) if literal.startswith("$") else IdentExpression(literal)
-        )
-
-        min_expr: Expression = self.gen_greater_equal_expression(
-            evaluated, RangeMinExpression(range_expr), player_selector
-        )
-        max_expr: Expression = self.gen_greater_equal_expression(
-            RangeMaxExpression(range_expr), evaluated, player_selector
-        )
-
-        return AndExpression([min_expr, max_expr])
 
     def parse_atom(self) -> Expression:
         """Parse the smallest whole value."""
@@ -392,6 +389,12 @@ class Parser:
 
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.keyword_xyz:
             return self.parse_xyz()
+
+        # Beside an operator, a counter or timer is only the number it holds.
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind in _NAMED_NUMBERS:
+            number_kind: EvalKind = _NAMED_NUMBERS[self.tokens[self.pos].kind]
+            self.pos += 1
+            return Eval(number_kind, [StringExpression(self.consume_any_ident().ident)])
 
         if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.identifier:
             tok: Token = self.tokens[self.pos]
@@ -459,12 +462,12 @@ class Parser:
     def _comparison(self, operator: Token, left: Expression, right: Expression) -> Expression:
         """The same test, asking no client."""
         if operator.kind == TokenKind.greater:
-            return self.gen_greater_expression(left, right, player_selector)
+            return GreaterExpression(left, right)
 
         if operator.kind == TokenKind.less:
-            return self.gen_greater_expression(right, left, player_selector)
+            return GreaterExpression(right, left)
 
-        return self.gen_equivalent_expression(left, right, player_selector)
+        return EquivalentExpression(left, right)
 
     def gen_greater_expression(
         self, left: Expression, right: Expression, player_selector: PlayerSelector
@@ -690,11 +693,28 @@ class Parser:
             ) or (isinstance(max_value, NumberExpression) and self.tokens[self.pos - 1].kind == TokenKind.percent)
 
         else:
+            # Only a written range can be checked now. A name fills in later.
+            if isinstance(first, StringExpression):
+                self._reject_bad_range(first.string, self.pos - 1)
+
             min_value: Expression = RangeMinExpression(first)
             max_value: Expression = RangeMaxExpression(first)
             is_percent: bool = False
 
         return min_value, max_value, is_percent
+
+    def _reject_bad_range(self, written: str, written_at: int) -> None:
+        """Refuse a badly written range."""
+        bounds: list[str] = written.split("-")
+
+        if len(bounds) != 2 or not all(_reads_as_number(bound) for bound in bounds):
+            self.err(self.tokens[written_at], f"Invalid range format: {written}. Expected format like '1-100'")
+
+    def _between(self, evaluated: Expression, min_value: Expression, max_value: Expression) -> Expression:
+        """The same tests, asking no client."""
+        return AndExpression(
+            [GreaterEqualExpression(evaluated, min_value), GreaterEqualExpression(max_value, evaluated)]
+        )
 
     def _gen_between(
         self, evaluated: Expression, min_value: Expression, max_value: Expression, player_selector: PlayerSelector
@@ -843,7 +863,52 @@ class Parser:
         if negation is not None:
             self.err(negation, "`not` here needs a check after it, or write it before the selector")
 
-        return self.parse_additive_expression()
+        value_at: int = self.pos
+        evaluated: Expression = self.parse_additive_expression()
+
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind in _COMPARISONS:
+            operator: Token = self.tokens[self.pos]
+            self.pos += 1
+            target_at: int = self.pos
+            target: Expression = self.parse_additive_expression()
+            self._reject_compared(player_selector, [(evaluated, value_at), (target, target_at)])
+
+            if self._is_written_out(evaluated) and self._is_written_out(target):
+                self.err(self.tokens[value_at], "Both sides are written out, so this comparison never changes")
+
+            return self._comparison(operator, evaluated, target)
+
+        if self.pos < len(self.tokens) and self.tokens[self.pos].kind == TokenKind.keyword_isbetween:
+            self.pos += 1
+            min_value, max_value, _ = self._parse_between_bounds()
+            self._reject_compared(player_selector, [(evaluated, value_at)])
+
+            if self._is_written_out(evaluated):
+                self.err(self.tokens[value_at], "The value is written out, so this range check never changes")
+
+            return self._between(evaluated, min_value, max_value)
+
+        return evaluated
+
+    def _is_written_out(self, expr: Expression) -> bool:
+        """Whether a value is written out."""
+        if isinstance(expr, BinaryExpression):
+            return self._is_written_out(expr.lhs) and self._is_written_out(expr.rhs)
+
+        if isinstance(expr, UnaryExpression):
+            return self._is_written_out(expr.expr)
+
+        return isinstance(expr, _WRITTEN_VALUES)
+
+    def _reject_compared(self, player_selector: PlayerSelector, sides: list[tuple[Expression, int]]) -> None:
+        """Refuse what cannot be compared."""
+        # A group reaches the whole grammar, so it may hold a check.
+        for side, written_at in sides:
+            if is_condition(side):
+                self.err(self.tokens[written_at], f"Expected a number, got {describe_expression(side)}")
+
+        if not player_selector.implicit:
+            self.err(self.tokens[sides[0][1]], "A comparison between values reads no client, so it takes no selector")
 
     def _token_for(self, expr: Expression, start: int, end: int) -> Token:
         """The token that wrote a value."""
@@ -1044,6 +1109,14 @@ class Parser:
             TokenKind.comma,
             TokenKind.number,
             TokenKind.minus,
+            TokenKind.identifier,
+        ]
+        inside_toks: list[TokenKind] = [
+            TokenKind.comma,
+            TokenKind.paren_close,
+            TokenKind.number,
+            TokenKind.minus,
+            TokenKind.identifier,
         ]
         expected_toks: list[TokenKind] = [TokenKind.paren_open]
         found_closing: bool = False
@@ -1055,19 +1128,14 @@ class Parser:
             match self.tokens[self.pos].kind:
                 case TokenKind.paren_open:
                     self.pos += 1
-                    expected_toks = [
-                        TokenKind.comma,
-                        TokenKind.number,
-                        TokenKind.paren_close,
-                        TokenKind.minus,
-                    ]
+                    expected_toks = inside_toks
 
                 case TokenKind.paren_close:
                     self.pos += 1
                     expected_toks = []
                     found_closing = True
 
-                case TokenKind.comma | TokenKind.number | TokenKind.minus:
+                case TokenKind.comma | TokenKind.number | TokenKind.minus | TokenKind.identifier:
                     # A skipped coordinate reads as 0, so XYZ(, , 10) only sets z.
                     if self.tokens[self.pos].kind == TokenKind.comma:
                         vals.append(NumberExpression(0.0))
@@ -1080,12 +1148,7 @@ class Parser:
                         if self.tokens[self.pos].kind == TokenKind.comma:
                             self.pos += 1
 
-                    expected_toks = [
-                        TokenKind.comma,
-                        TokenKind.paren_close,
-                        TokenKind.number,
-                        TokenKind.minus,
-                    ]
+                    expected_toks = inside_toks
 
         if not found_closing:
             self.err(start_tok, "Encountered unclosed XYZ")
@@ -1307,13 +1370,27 @@ class Parser:
 
             case TokenKind.keyword_times:
                 self.pos += 1
-                count_tok: Token = self.expect_consume(TokenKind.number)
 
-                if count_tok.value != int(count_tok.value):
-                    self.err(count_tok, f"Expected a whole number of repetitions, got {count_tok.value}")
+                # Only a written count can be checked now. A name fills in later.
+                if self.tokens[self.pos].kind == TokenKind.number:
+                    count_tok: Token = self.expect_consume(TokenKind.number)
+
+                    if not isfinite(count_tok.value) or count_tok.value != int(count_tok.value):
+                        self.err(count_tok, f"Expected a whole number of repetitions, got {count_tok.value}")
+
+                    count: Expression = NumberExpression(count_tok.value)
+
+                elif self.tokens[self.pos].kind == TokenKind.identifier:
+                    count: Expression = self.parse_value([TokenKind.identifier])
+
+                else:
+                    self.err(
+                        self.tokens[self.pos],
+                        f"Expected a number of repetitions or a name holding one, got {_written(self.tokens[self.pos])}",
+                    )
 
                 body: StmtList = self.parse_block()
-                return TimesStmt(int(count_tok.value), body)
+                return TimesStmt(count, body)
 
             case TokenKind.keyword_if:
                 self.pos += 1

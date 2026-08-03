@@ -219,7 +219,10 @@ def optional_choice(*tokens: TokenKind) -> ArgShape:
 
 
 def string_literal(parser: Parser) -> list[Any]:
-    """Parse a required quoted string."""
+    """Parse a quoted string or a name."""
+    if parser.tokens[parser.pos].kind == TokenKind.identifier:
+        return [IdentExpression(parser.expect_consume(TokenKind.identifier).literal)]
+
     return [parser.expect_consume(TokenKind.string).value]
 
 

@@ -312,6 +312,16 @@ class UnaryExpression(Expression):
         return f"Unary({self.operator}, {self.expr})"
 
 
+class WholeNumberExpression(Expression):
+    """A count, always a whole number."""
+
+    def __init__(self, expr: Expression) -> None:
+        self.expr: Expression = expr
+
+    def __repr__(self) -> str:
+        return f"Whole({self.expr})"
+
+
 class KeyExpression(Expression):
     """A keyboard key name."""
 
@@ -767,14 +777,14 @@ class UntilStmt(Stmt):
 
 
 class TimesStmt(Stmt):
-    """Repeats its body a fixed number of times."""
+    """Repeats a counted number of times."""
 
-    def __init__(self, num: int, body: StmtList) -> None:
-        self.num: int = num
+    def __init__(self, count: Expression, body: StmtList) -> None:
+        self.count: Expression = count
         self.body: StmtList = body
 
     def __repr__(self) -> str:
-        return f"TimesS {self.num} {{ {self.body} }}"
+        return f"TimesS {self.count} {{ {self.body} }}"
 
 
 class BlockDefStmt(Stmt):
