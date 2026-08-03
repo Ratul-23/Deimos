@@ -832,23 +832,26 @@ class Parser:
 
                 self.pos += 1
 
+                # `$x` and `x` name the same constant, so the $ would look one up that was never declared.
+                checked: str = ident.removeprefix("$")
+
                 if self.pos < len(self.tokens):
                     if self.tokens[self.pos].kind == TokenKind.boolean_true:
                         token: Token = self.tokens[self.pos]
                         self.pos += 1
                         return ConstantCheckExpression(
-                            ident, ConstantExpression(token.literal, StringExpression("true"))
+                            checked, ConstantExpression(token.literal, StringExpression("true"))
                         )
 
                     elif self.tokens[self.pos].kind == TokenKind.boolean_false:
                         token: Token = self.tokens[self.pos]
                         self.pos += 1
                         return ConstantCheckExpression(
-                            ident, ConstantExpression(token.literal, StringExpression("false"))
+                            checked, ConstantExpression(token.literal, StringExpression("false"))
                         )
 
                 value: Expression = self.parse_expression()
-                return ConstantCheckExpression(ident, value)
+                return ConstantCheckExpression(checked, value)
 
             # No = followed. Give the identifier back to the rest of this method.
             else:
@@ -1291,6 +1294,10 @@ class Parser:
             and "command" not in result.kind.name
         ):
             self.err(result, f"Expected a name, got {_written(result)}")
+
+        # Keeping the $ would name it `$x`, which `$x` never finds.
+        if result.literal.startswith("$"):
+            self.err(result, f"Write {result.literal[1:]} instead, since a name is given without the $")
 
         self.pos += 1
         return IdentExpression(result.literal)

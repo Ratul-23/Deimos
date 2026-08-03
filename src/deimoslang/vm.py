@@ -61,6 +61,7 @@ from .ast import (
     SubExpression,
     UnaryExpression,
     UnaryOp,
+    UnknownConstantError,
     VMError,
     WholeNumberExpression,
     XYZExpression,
@@ -429,14 +430,17 @@ class VM:
         return False
 
     def _named_constant(self, text: str) -> Any:
-        """What a `$name` stands for, or the text itself when nothing was declared under that name."""
+        """What a `$name` stands for."""
         const_name: str = text[1:]
 
         if const_name in self._constants:
             return self._constants[const_name]
 
-        logger.warning(f"Constant '{const_name}' not found")
-        return text
+        raise UnknownConstantError(f"Unknown constant: ${const_name}")
+
+    def _written_constant(self, text: str) -> Any:
+        """What spelled-out text stands for, kept as written when no constant has that name."""
+        return self._constants.get(text[1:], text) if text.startswith("$") else text
 
     async def _extract_data_info(self, data: Any) -> Any:
         """Resolve an argument to a value."""
@@ -444,12 +448,12 @@ class VM:
         if isinstance(data, (int, float)):
             return data
 
-        # A bare string is either a $constant reference or the value itself.
+        # A name arrives as an expression. Text here may just start with a $.
         if isinstance(data, str):
-            return self._named_constant(data) if data.startswith("$") else data
+            return self._written_constant(data)
 
         elif isinstance(data, StringExpression):
-            return self._named_constant(data.string) if data.string.startswith("$") else data.string
+            return self._written_constant(data.string)
 
         elif isinstance(data, IdentExpression):
             ident: str = data.ident
@@ -537,6 +541,14 @@ class VM:
 
         return len(asked) > 0 and len(failed) == len(asked)
 
+    async def _eval_operand(self, side: Expression, client: Client | None) -> Any:
+        """A value that must be a number."""
+        # A name nothing was declared under reads as the word itself, which is never the number wanted.
+        if isinstance(side, IdentExpression) and side.ident not in self._constants:
+            raise UnknownConstantError(f"Unknown constant: {side.ident}")
+
+        return await self.eval(side, client)
+
     async def eval(self, expression: Expression, client: Client | None = None) -> Any:
         """Evaluate an expression, maybe per client."""
         match expression:
@@ -550,7 +562,7 @@ class VM:
                 if expression.name in self._constants:
                     return self._constants[expression.name]
 
-                raise VMError(f"Unknown constant: ${expression.name}")
+                raise UnknownConstantError(f"Unknown constant: ${expression.name}")
 
             case ConstantExpression():
                 # `true` and `false` are spelled as text, but a constant declared from one holds a boolean.
@@ -568,7 +580,7 @@ class VM:
 
                     return actual_value == expected_value
 
-                return False
+                raise UnknownConstantError(f"Unknown constant: {constant_name}")
 
             case RangeMinExpression():
                 return await self._eval_range_end(expression.range_expr, 0, client)
@@ -651,9 +663,9 @@ class VM:
             case XYZExpression():
                 # A name may stand in for a coordinate. Only a number is a place.
                 return XYZ(
-                    _as_coordinate(await self.eval(expression.x, client), expression),
-                    _as_coordinate(await self.eval(expression.y, client), expression),
-                    _as_coordinate(await self.eval(expression.z, client), expression),
+                    _as_coordinate(await self._eval_operand(expression.x, client), expression),
+                    _as_coordinate(await self._eval_operand(expression.y, client), expression),
+                    _as_coordinate(await self._eval_operand(expression.z, client), expression),
                 )
 
             case UnaryExpression():
@@ -718,8 +730,8 @@ class VM:
                 return left == right
 
             case AddExpression() | SubExpression() | MultiplyExpression():
-                left: float = _as_number(await self.eval(expression.lhs, client), expression)
-                right: float = _as_number(await self.eval(expression.rhs, client), expression)
+                left: float = _as_number(await self._eval_operand(expression.lhs, client), expression)
+                right: float = _as_number(await self._eval_operand(expression.rhs, client), expression)
 
                 if isinstance(expression, AddExpression):
                     return left + right
@@ -730,8 +742,8 @@ class VM:
                 return left * right
 
             case DivideExpression() | ModuloExpression():
-                left: float = _as_number(await self.eval(expression.lhs, client), expression)
-                right: float = _as_number(await self.eval(expression.rhs, client), expression)
+                left: float = _as_number(await self._eval_operand(expression.lhs, client), expression)
+                right: float = _as_number(await self._eval_operand(expression.rhs, client), expression)
 
                 if right == 0:
                     act: str = "Modulo" if isinstance(expression, ModuloExpression) else "Division"
@@ -743,7 +755,7 @@ class VM:
                 return left / right
 
             case WholeNumberExpression():
-                counted: float = _as_number(await self.eval(expression.expr, client), expression)
+                counted: float = _as_number(await self._eval_operand(expression.expr, client), expression)
 
                 # Already whole. Too big to weigh cannot be asked if it is finite.
                 if isinstance(counted, int):
@@ -758,8 +770,8 @@ class VM:
                 return int(counted)
 
             case GreaterExpression() | GreaterEqualExpression():
-                left: Any = await self.eval(expression.lhs, client)
-                right: Any = await self.eval(expression.rhs, client)
+                left: Any = await self._eval_operand(expression.lhs, client)
+                right: Any = await self._eval_operand(expression.rhs, client)
 
                 if isinstance(left, list) and len(left) > 0:
                     left = left[0]
@@ -845,7 +857,7 @@ class VM:
 
     async def _eval_range_end(self, range_expr: Expression, index: int, client: Client | None) -> float:
         """One end of a written range."""
-        range_value: Any = await self.eval(range_expr, client)
+        range_value: Any = await self._eval_operand(range_expr, client)
 
         if isinstance(range_value, str):
             parts: list[str] = range_value.split("-")
@@ -889,24 +901,17 @@ class VM:
         async def eval_arg(arg: Any, client: Client | None) -> Any:
             """Resolve one argument to a value."""
             if isinstance(arg, Expression):
+                # A $name must stand for something. A bare name may be what was meant.
                 if isinstance(arg, IdentExpression):
-                    # A $name and a bare name both refer to the same constant.
-                    constant_name: str = arg.ident.removeprefix("$")
+                    if arg.ident.startswith("$"):
+                        return self._named_constant(arg.ident)
 
-                    if constant_name in self._constants:
-                        return self._constants[constant_name]
-
-                    return arg.ident
+                    return self._constants.get(arg.ident, arg.ident)
 
                 return await self.eval(arg, client)
 
-            elif isinstance(arg, str) and arg.startswith("$"):
-                constant_name: str = arg[1:]
-                if constant_name in self._constants:
-                    return self._constants[constant_name]
-                else:
-                    logger.error(f"Undefined constant: {arg}")
-                    return arg
+            elif isinstance(arg, str):
+                return self._written_constant(arg)
 
             return arg
 
@@ -950,6 +955,9 @@ class VM:
                     if await self.eval(info.expr):
                         self.current_task.ip = info.exit_point
                         return
+
+                except UnknownConstantError:
+                    raise
 
                 except VMError as error:
                     error.locate(info.line_info)
@@ -1103,6 +1111,10 @@ class VM:
                     else:
                         self.current_task.ip += 1
 
+                # A name standing for nothing is a script mistake. Carrying on would guess.
+                except UnknownConstantError:
+                    raise
+
                 # An unreadable condition takes the forward branch. The bot never stalls.
                 except VMError as error:
                     error.locate(instruction.line_info)
@@ -1122,6 +1134,9 @@ class VM:
                         self.current_task.ip += 1
                     else:
                         self.current_task.ip += instruction.data[1]
+
+                except UnknownConstantError:
+                    raise
 
                 except VMError as error:
                     error.locate(instruction.line_info)
