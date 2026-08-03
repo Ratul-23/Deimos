@@ -360,7 +360,7 @@ async def items_dropped(ctx: EvalContext) -> bool:
 @predicate(ExprKind.window_visible)
 async def window_visible(ctx: EvalContext) -> bool:
     """Whether the window at a path is visible."""
-    # Resolving hands back the path itself, with any $variable naming it already substituted.
+    # Resolving substitutes any $variable.
     path: list[str] | None = _valid_window_path(await ctx.vm._extract_data_info(ctx.expression.command.data[1]))
 
     if path is None:
@@ -388,7 +388,7 @@ async def window_visible(ctx: EvalContext) -> bool:
 @predicate(ExprKind.window_disabled)
 async def window_disabled(ctx: EvalContext) -> bool:
     """Whether the window at a path is greyed out."""
-    # Resolving hands back the path itself, with any $variable naming it already substituted.
+    # Resolving substitutes any $variable.
     path: list[str] | None = _valid_window_path(await ctx.vm._extract_data_info(ctx.expression.command.data[1]))
 
     if path is None:
