@@ -170,6 +170,14 @@ def _as_bool(value: Any) -> Any:
     return value
 
 
+class VariableScope:
+    """One call's variables and its consts."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, Any] = {}
+        self.constants: set[str] = set()
+
+
 class UntilInfo:
     """A running `until` and its exit."""
 
@@ -180,6 +188,7 @@ class UntilInfo:
         exit_point: int,
         stack_size: int,
         scopes: list[list[SprintyClient]],
+        variable_scopes: list["VariableScope"],
         line_info: LineInfo | None = None,
     ) -> None:
         self.expr: Expression = expr
@@ -189,6 +198,9 @@ class UntilInfo:
 
         # The call scopes when this until started. A poll reads the same clients.
         self.scopes: list[list[SprintyClient]] = scopes
+
+        # The variable scopes too, so a poll reads the same names.
+        self.variable_scopes: list[VariableScope] = variable_scopes
         self.line_info: LineInfo | None = line_info
 
 
@@ -208,14 +220,8 @@ class VM:
         # The clients each running call was made on, newest last.
         self._call_scopes: list[list[SprintyClient]] = []
 
-        # True and False are defined up front so `$True` and `$False` resolve without being declared.
-        self._variables: dict[str, Any] = {
-            "True": True,
-            "False": False,
-        }
-
-        # Names a const claimed, which nothing may assign to again.
-        self._constant_names: set[str] = {"True", "False"}
+        # One set per running call, in step with the clients above. A block sees only its own.
+        self._scopes: list[VariableScope] = [VariableScope()]
         self.on_toggle_combat: Callable[[bool | None], Awaitable[None]] | None = None
         self.on_restart_client: Callable[[list[SprintyClient]], Awaitable[list[Client | None]]] | None = None
         self._timers: dict[str, float] = {}
@@ -241,11 +247,7 @@ class VM:
         self._counters = {}
         self._any_player_client = []
         self._call_scopes = []
-        self._variables = {
-            "True": True,
-            "False": False,
-        }
-        self._constant_names = {"True", "False"}
+        self._scopes = [VariableScope()]
         self.logged_data = {"goal": {}, "quest": {}, "zone": {}}
 
     def stop(self) -> None:
@@ -257,16 +259,23 @@ class VM:
         self.stop()
         self.killed = True
 
+    @property
+    def _variables(self) -> dict[str, Any]:
+        """The running call's variables."""
+        return self._scopes[-1].values
+
     async def define_variable(self, name: str, value: Any, constant: bool = False) -> None:
         """Set a variable, never a const."""
+        scope: VariableScope = self._scopes[-1]
+
         # A const keeps what it was given. No later write.
-        if name in self._constant_names:
+        if name in scope.constants:
             raise VMError(f"{name} is a const, so it cannot be changed")
 
         if constant:
-            self._constant_names.add(name)
+            scope.constants.add(name)
 
-        self._variables[name] = value
+        scope.values[name] = value
 
     def load_from_text(self, code: str, filename: str | None = None) -> None:
         """Compile source text into a program."""
@@ -1013,6 +1022,7 @@ class VM:
         # Polling must not rewrite what sameany and anyplayer read.
         watching: list[SprintyClient] = self._any_player_client
         running_scopes: list[list[SprintyClient]] = self._call_scopes
+        running_variables: list[VariableScope] = self._scopes
         self._polling_untils = True
 
         try:
@@ -1022,6 +1032,7 @@ class VM:
 
                 try:
                     self._call_scopes = info.scopes
+                    self._scopes = info.variable_scopes
                     # An until that ends hands its own clients on.
                     if await self.eval(info.expr):
                         self.current_task.ip = info.exit_point
@@ -1039,6 +1050,7 @@ class VM:
         finally:
             self._polling_untils = False
             self._call_scopes = running_scopes
+            self._scopes = running_variables
 
         self._any_player_client = watching
 
@@ -1234,12 +1246,19 @@ class VM:
 
                     # Copied. sameany hands over a list anyplayer appends to.
                     self._call_scopes.append(list(callers))
+
+                    # A block starts empty. Its names cannot escape either.
+                    self._scopes.append(VariableScope())
                     self.current_task.stack.append(self.current_task.ip + 1)
                     self.current_task.ip += offset
 
             case InstructionKind.ret:
                 if self._call_scopes:
                     self._call_scopes.pop()
+
+                # The top scope is the script's own. Only a call's is dropped.
+                if len(self._scopes) > 1:
+                    self._scopes.pop()
 
                 self.current_task.ip = self.current_task.stack.pop()
 
@@ -1252,6 +1271,7 @@ class VM:
                         exit_point=self.current_task.ip + instruction.data[2],
                         stack_size=len(self.current_task.stack),
                         scopes=list(self._call_scopes),
+                        variable_scopes=list(self._scopes),
                         line_info=instruction.line_info,
                     )
                 )
@@ -1268,6 +1288,7 @@ class VM:
 
                         # Leaving the region abandons the calls it opened. Their scopes go too.
                         self._call_scopes = self._call_scopes[: len(info.scopes)]
+                        self._scopes = self._scopes[: len(info.variable_scopes)]
                         break
 
                 self.current_task.ip += 1
