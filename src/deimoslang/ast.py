@@ -869,6 +869,10 @@ class VMError(LocatedError):
     """An instruction cannot be carried out."""
 
 
+class UnknownConstantError(VMError):
+    """Raised when a `$name` stands for nothing, which waiting will not fix."""
+
+
 class InstructionKind(Enum):
     """Every instruction the compiler can emit."""
 

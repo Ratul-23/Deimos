@@ -327,7 +327,7 @@ def greedy_name(parser: Parser) -> list[Any]:
         and parser.pos + 1 < len(parser.tokens)
         and parser.tokens[parser.pos + 1].kind == TokenKind.END_LINE
     ):
-        return [parser.expect_consume(TokenKind.identifier).literal]
+        return [IdentExpression(parser.expect_consume(TokenKind.identifier).literal)]
 
     # Written unquoted. Glue back the tokens the lexer split.
     parts: list[str] = []
@@ -537,7 +537,7 @@ def parse_entity_teleport(parser: Parser) -> list[Any]:
 
     elif parser.tokens[parser.pos].kind == TokenKind.identifier:
         ident: Token = parser.expect_consume(TokenKind.identifier)
-        data: list[Any] = [TeleportKind.entity_vague, ident.literal]
+        data: list[Any] = [TeleportKind.entity_vague, IdentExpression(ident.literal)]
 
     else:
         token: Token = parser.tokens[parser.pos]

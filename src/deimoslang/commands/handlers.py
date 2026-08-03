@@ -588,7 +588,7 @@ async def instr_kill(ctx: InstructionContext) -> None:
 async def instr_sleep(ctx: InstructionContext) -> None:
     """Pause the whole program."""
     assert ctx.instruction.data is not None
-    time: float = _as_number(await ctx.vm.eval(ctx.instruction.data))
+    time: float = _as_number(await ctx.vm._eval_operand(ctx.instruction.data, None))
     await asyncio.sleep(time)
     ctx.vm.current_task.ip += 1
 
